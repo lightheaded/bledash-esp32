@@ -1,90 +1,81 @@
-// bledash-esp32 — M2: BLE scan / recon.
-// Active NimBLE scan that dumps every advertiser (address, RSSI, name, service
-// UUIDs, manufacturer data as hex + ASCII) to serial, so we can identify:
-//   - the Alpicool K25 and its advertised service UUIDs,
-//   - the EcoFlow River 2 Max (serial in manufacturer data) vs the techroom
-//     River 2, and the battery-% byte offset.
-// Disable the HA alpicool_ble integration first (scripts/ha-alpicool.py disable)
-// or the fridge won't be advertising.
+// bledash-esp32 — M3: Alpicool driver + fridge page.
+// Connect to the K25 over BLE, poll status once a minute, and render the fridge
+// readings on the 72x40 OLED. EcoFlow is added in M4.
 
 #include <Arduino.h>
-#include <NimBLEDevice.h>
+#include <U8g2lib.h>
+#include <Wire.h>
 
 #include "config.h"
+#include "devices/alpicool.h"
 
-static String toHex(const uint8_t* data, size_t len) {
-  String s;
-  s.reserve(len * 3);
-  char buf[4];
-  for (size_t i = 0; i < len; i++) {
-    snprintf(buf, sizeof(buf), "%02X ", data[i]);
-    s += buf;
+static const uint32_t kPollIntervalMs = 60000;
+// Consider a reading stale after two missed polls.
+static const uint32_t kStaleMs = 2 * kPollIntervalMs + 15000;
+
+U8G2_SSD1306_72X40_ER_F_HW_I2C display(U8G2_R0, /*reset=*/U8X8_PIN_NONE);
+AlpicoolDriver fridge;
+
+static void renderFridge() {
+  const FridgeReading& r = fridge.reading();
+  bool stale = !r.valid || (millis() - r.lastUpdateMs > kStaleMs);
+
+  display.clearBuffer();
+
+  // Small header row: label + connection/power state.
+  display.setFont(u8g2_font_5x7_tf);
+  display.drawStr(0, 6, "FRIDGE");
+  const char* state = stale ? (fridge.connected() ? "..." : "OFFLINE")
+                            : (r.poweredOn ? "ON" : "OFF");
+  display.drawStr(display.getDisplayWidth() - display.getStrWidth(state), 6, state);
+
+  // Big actual temperature.
+  char big[8];
+  if (stale) {
+    snprintf(big, sizeof(big), "--");
+  } else {
+    snprintf(big, sizeof(big), "%d", r.actualTemp);
   }
-  return s;
+  display.setFont(u8g2_font_logisoso20_tr);
+  int bw = display.getStrWidth(big);
+  int bx = (display.getDisplayWidth() - bw) / 2 - 5;
+  display.drawStr(bx, 30, big);
+  // Degree + C to the upper right of the number.
+  display.setFont(u8g2_font_6x10_tf);
+  display.drawStr(bx + bw + 2, 15, "\xb0" "C");
+
+  // Setpoint on the bottom row.
+  display.setFont(u8g2_font_5x7_tf);
+  char sp[12];
+  if (stale) {
+    snprintf(sp, sizeof(sp), "set --");
+  } else {
+    snprintf(sp, sizeof(sp), "set %d\xb0", r.targetTemp);
+  }
+  display.drawStr(0, 39, sp);
+
+  display.sendBuffer();
 }
-
-static String toAscii(const uint8_t* data, size_t len) {
-  String s;
-  s.reserve(len);
-  for (size_t i = 0; i < len; i++) {
-    char c = (char)data[i];
-    s += (c >= 0x20 && c < 0x7f) ? c : '.';
-  }
-  return s;
-}
-
-class ScanCallbacks : public NimBLEScanCallbacks {
-  void onResult(const NimBLEAdvertisedDevice* dev) override {
-    const std::string addr = dev->getAddress().toString();
-    const std::string name = dev->haveName() ? dev->getName() : "";
-
-    Serial.printf("\n[%s] RSSI=%d", addr.c_str(), dev->getRSSI());
-    if (!name.empty()) Serial.printf("  name=\"%s\"", name.c_str());
-    Serial.println();
-
-    const uint8_t svcCount = dev->getServiceUUIDCount();
-    for (uint8_t i = 0; i < svcCount; i++) {
-      Serial.printf("    service: %s\n", dev->getServiceUUID(i).toString().c_str());
-    }
-
-    if (dev->haveManufacturerData()) {
-      const std::string md = dev->getManufacturerData();
-      const uint8_t* p = (const uint8_t*)md.data();
-      const size_t n = md.size();
-      // First two bytes are the company ID (little-endian).
-      uint16_t company = n >= 2 ? (uint16_t)(p[0] | (p[1] << 8)) : 0;
-      Serial.printf("    mfr (companyID=0x%04X, %u bytes):\n", company, (unsigned)n);
-      Serial.printf("      hex: %s\n", toHex(p, n).c_str());
-      Serial.printf("      asc: %s\n", toAscii(p, n).c_str());
-    }
-  }
-
-  void onScanEnd(const NimBLEScanResults& results, int reason) override {
-    Serial.printf("\n--- scan window ended (reason=%d, %d devices) ---\n",
-                  reason, results.getCount());
-    NimBLEDevice::getScan()->start(0, false, true);  // restart continuous
-  }
-};
-
-static ScanCallbacks scanCallbacks;
 
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== bledash M2: BLE scan / recon ===");
-  Serial.printf("Looking for Alpicool MAC %s and EcoFlow serial %s\n",
-                ALPICOOL_MAC, ECOFLOW_SERIAL);
+  Serial.println("\n=== bledash M3: Alpicool driver ===");
 
-  NimBLEDevice::init("bledash-scan");
-  NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setScanCallbacks(&scanCallbacks, /*wantDuplicates=*/false);
-  scan->setActiveScan(true);   // recon: also pull scan-response payloads
-  scan->setInterval(100);
-  scan->setWindow(90);
-  scan->start(0, false, true);  // duration=0 -> scan forever
-  Serial.println("Scanning...");
+  Wire.begin(OLED_SDA, OLED_SCL);
+  display.begin();
+  display.setContrast(180);
+  display.setFontMode(1);
+
+  NimBLEDevice::init("bledash");
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);  // max TX power for marginal in-car range
+  fridge.begin(ALPICOOL_MAC, kPollIntervalMs);
+
+  Serial.printf("Target fridge: %s\n", ALPICOOL_MAC);
 }
 
 void loop() {
-  delay(1000);
+  fridge.loop();
+  renderFridge();
+  delay(200);
 }
