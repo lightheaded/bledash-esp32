@@ -17,6 +17,9 @@ build/
 include/config.h
 src/config.h
 
+# Private device identifiers (MACs, serials) and other local-only notes
+local/
+
 # Editor
 *.swp
 *.swo
