@@ -1,0 +1,27 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.clang_complete
+.gcc-flags.json
+
+# Arduino IDE
+build/
+*.hex
+*.elf
+*.bin
+*.map
+
+# Local config (contains device MACs)
+include/config.h
+src/config.h
+
+# Editor
+*.swp
+*.swo
+.idea/
+.DS_Store
+
+# Logs
+*.log
