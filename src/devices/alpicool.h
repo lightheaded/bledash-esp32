@@ -1,6 +1,9 @@
 // Alpicool K25 BLE driver.
-// Connects to the fridge, sends BIND + QUERY over char 0x1235, parses the
-// FE FE-framed status notifications from char 0x1236.
+// Holds a connection to the fridge, sends BIND + QUERY over char 0x1235, parses
+// the FE FE-framed status notifications from char 0x1236.
+// The owner drives BLE scanning and hands us the fridge's advertisement when it
+// appears (see connectTo); we don't scan ourselves, so the owner can also scan
+// for other devices (e.g. EcoFlow) without contention.
 // Protocol: see docs/protocols/alpicool.md.
 #pragma once
 
@@ -20,24 +23,25 @@ struct FridgeReading {
 
 class AlpicoolDriver : public NimBLEClientCallbacks {
  public:
-  // mac: lowercase or uppercase "aa:bb:cc:dd:ee:ff". queryIntervalMs: poll cadence.
+  // mac: "aa:bb:cc:dd:ee:ff". queryIntervalMs: status poll cadence.
   void begin(const char* mac, uint32_t queryIntervalMs);
 
-  // Call frequently from loop(). Manages (re)connect and periodic QUERY.
-  void loop();
+  // True if this advertised device is our fridge.
+  bool matches(const NimBLEAdvertisedDevice* dev) const;
+
+  // Connect + discover + subscribe + BIND. Call with our advertisement (from the
+  // owner's scan) when disconnected. Returns true once connected & bound.
+  bool connectTo(const NimBLEAdvertisedDevice* dev);
+
+  // Call frequently. Sends a QUERY when connected and the interval has elapsed.
+  void poll();
 
   bool connected() const { return client_ && client_->isConnected(); }
   const FridgeReading& reading() const { return reading_; }
 
-  // True if the fridge was seen advertising during the last connect attempt
-  // (distinguishes "out of range / held elsewhere" from "connected").
-  bool wasAdvertising() const { return wasAdvertising_; }
-
  private:
-  void onConnect(NimBLEClient* c) override;
   void onDisconnect(NimBLEClient* c, int reason) override;
 
-  bool ensureConnected();
   bool discoverChars();
   void onNotify(const uint8_t* data, size_t len);
   void handleFrame(const uint8_t* frame, size_t total);
@@ -54,7 +58,4 @@ class AlpicoolDriver : public NimBLEClientCallbacks {
   std::vector<uint8_t> buf_;  // notification reassembly buffer
   FridgeReading reading_;
   uint32_t lastQueryMs_ = 0;
-  uint32_t lastConnAttemptMs_ = 0;
-  bool bound_ = false;
-  bool wasAdvertising_ = false;
 };
