@@ -38,6 +38,15 @@ At M2, two units were in range simultaneously:
 
 Both match, so **offset 19 is the SoC in whole percent**.
 
+### Advertising is not continuous when idle
+
+Observed at M5: the River 2 Max stopped advertising over BLE (and stopped
+reporting to the EcoFlow cloud) after roughly an hour idle — both transports
+went quiet together, so it's a device power/idle state, not a BLE-specific
+quirk. When it's actually working (e.g. powering the fridge in the car) it
+advertises fine. The firmware treats a battery reading with no fresh
+advertisement as stale (`--` on the display) after `kBatteryStaleMs`.
+
 ### Implementation notes for the firmware
 
 - Match on the **full serial** at offset 3–18, not on company ID or name prefix:
