@@ -26,7 +26,7 @@ This firmware is a BLE Central that polls one or more BLE Peripherals on a sched
 
 ## MVP scope
 
-- **Hardware:** ESP32‑C3 "MINI" board (2.4 GHz WiFi, BLE 5.0, 4 MB flash, ceramic antenna, USB Type‑C, onboard 0.42″ SSD1306 OLED, 72×40 px).
+- **Hardware:** ESP32‑C3 "MINI" board (2.4 GHz WiFi, BLE 5.0, 4 MB flash, ceramic antenna, USB Type‑C, onboard 0.42″ SSD1306 OLED, 72×40 px). ([AliExpress link]([url](https://www.aliexpress.com/item/1005008570438676.html)))
 - **Power:** 5 V via USB‑C from the car's USB port (always‑on while the car is on).
 - **Devices:**
   - Alpicool K‑series 12/24V compressor fridge — target temp, actual temp, on/off (via a held BLE connection).
