@@ -1,81 +1,90 @@
-// bledash-esp32 — M1: hello display.
-// Initialize the onboard 0.42" 72x40 SSD1306 OLED and show "bledash" with a
-// pixel-animated dot. Also probes the two candidate I2C pin pairs so the serial
-// log states definitively which GPIOs drive the onboard panel (open question #1).
+// bledash-esp32 — M2: BLE scan / recon.
+// Active NimBLE scan that dumps every advertiser (address, RSSI, name, service
+// UUIDs, manufacturer data as hex + ASCII) to serial, so we can identify:
+//   - the Alpicool K25 and its advertised service UUIDs,
+//   - the EcoFlow River 2 Max (serial in manufacturer data) vs the techroom
+//     River 2, and the battery-% byte offset.
+// Disable the HA alpicool_ble integration first (scripts/ha-alpicool.py disable)
+// or the fridge won't be advertising.
 
 #include <Arduino.h>
-#include <U8g2lib.h>
-#include <Wire.h>
+#include <NimBLEDevice.h>
 
 #include "config.h"
 
-static const uint8_t SSD1306_ADDR = 0x3C;
-
-// Candidate I2C pin pairs for this board family: {SDA, SCL}.
-// config.h's OLED_SDA/OLED_SCL is tried first, then the alternate vendor labels.
-struct PinPair {
-  uint8_t sda;
-  uint8_t scl;
-};
-static const PinPair kCandidates[] = {{OLED_SDA, OLED_SCL}, {8, 9}, {5, 6}};
-
-// Full framebuffer (_F_), hardware I2C. Pins are set via Wire.begin() before
-// display.begin(), so the constructor pins are placeholders.
-U8G2_SSD1306_72X40_ER_F_HW_I2C display(U8G2_R0, /*reset=*/U8X8_PIN_NONE);
-
-static bool i2cDevicePresent(uint8_t sda, uint8_t scl, uint8_t addr) {
-  Wire.end();
-  Wire.begin(sda, scl);
-  Wire.setClock(400000);
-  Wire.beginTransmission(addr);
-  return Wire.endTransmission() == 0;  // 0 == device ACKed
+static String toHex(const uint8_t* data, size_t len) {
+  String s;
+  s.reserve(len * 3);
+  char buf[4];
+  for (size_t i = 0; i < len; i++) {
+    snprintf(buf, sizeof(buf), "%02X ", data[i]);
+    s += buf;
+  }
+  return s;
 }
 
-static PinPair gActive = {OLED_SDA, OLED_SCL};
+static String toAscii(const uint8_t* data, size_t len) {
+  String s;
+  s.reserve(len);
+  for (size_t i = 0; i < len; i++) {
+    char c = (char)data[i];
+    s += (c >= 0x20 && c < 0x7f) ? c : '.';
+  }
+  return s;
+}
+
+class ScanCallbacks : public NimBLEScanCallbacks {
+  void onResult(const NimBLEAdvertisedDevice* dev) override {
+    const std::string addr = dev->getAddress().toString();
+    const std::string name = dev->haveName() ? dev->getName() : "";
+
+    Serial.printf("\n[%s] RSSI=%d", addr.c_str(), dev->getRSSI());
+    if (!name.empty()) Serial.printf("  name=\"%s\"", name.c_str());
+    Serial.println();
+
+    const uint8_t svcCount = dev->getServiceUUIDCount();
+    for (uint8_t i = 0; i < svcCount; i++) {
+      Serial.printf("    service: %s\n", dev->getServiceUUID(i).toString().c_str());
+    }
+
+    if (dev->haveManufacturerData()) {
+      const std::string md = dev->getManufacturerData();
+      const uint8_t* p = (const uint8_t*)md.data();
+      const size_t n = md.size();
+      // First two bytes are the company ID (little-endian).
+      uint16_t company = n >= 2 ? (uint16_t)(p[0] | (p[1] << 8)) : 0;
+      Serial.printf("    mfr (companyID=0x%04X, %u bytes):\n", company, (unsigned)n);
+      Serial.printf("      hex: %s\n", toHex(p, n).c_str());
+      Serial.printf("      asc: %s\n", toAscii(p, n).c_str());
+    }
+  }
+
+  void onScanEnd(const NimBLEScanResults& results, int reason) override {
+    Serial.printf("\n--- scan window ended (reason=%d, %d devices) ---\n",
+                  reason, results.getCount());
+    NimBLEDevice::getScan()->start(0, false, true);  // restart continuous
+  }
+};
+
+static ScanCallbacks scanCallbacks;
 
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== bledash M1: hello display ===");
+  Serial.println("\n=== bledash M2: BLE scan / recon ===");
+  Serial.printf("Looking for Alpicool MAC %s and EcoFlow serial %s\n",
+                ALPICOOL_MAC, ECOFLOW_SERIAL);
 
-  bool found = false;
-  for (const PinPair& p : kCandidates) {
-    bool ack = i2cDevicePresent(p.sda, p.scl, SSD1306_ADDR);
-    Serial.printf("I2C probe SDA=%2d SCL=%2d @0x%02X -> %s\n", p.sda, p.scl,
-                  SSD1306_ADDR, ack ? "ACK (display here)" : "no response");
-    if (ack && !found) {
-      gActive = p;
-      found = true;
-    }
-  }
-
-  if (!found) {
-    Serial.println("WARNING: no SSD1306 ACK on any candidate pins; "
-                   "defaulting to config.h pins. Check wiring.");
-  }
-  Serial.printf("Using SDA=%d SCL=%d\n", gActive.sda, gActive.scl);
-
-  Wire.end();
-  Wire.begin(gActive.sda, gActive.scl);
-  display.begin();
-  display.setContrast(180);
+  NimBLEDevice::init("bledash-scan");
+  NimBLEScan* scan = NimBLEDevice::getScan();
+  scan->setScanCallbacks(&scanCallbacks, /*wantDuplicates=*/false);
+  scan->setActiveScan(true);   // recon: also pull scan-response payloads
+  scan->setInterval(100);
+  scan->setWindow(90);
+  scan->start(0, false, true);  // duration=0 -> scan forever
+  Serial.println("Scanning...");
 }
 
 void loop() {
-  static uint8_t frame = 0;
-
-  display.clearBuffer();
-
-  display.setFont(u8g2_font_7x14B_tr);
-  display.drawStr(6, 16, "bledash");
-
-  // A dot that walks across the bottom to prove the loop is live.
-  const int w = display.getDisplayWidth();
-  int x = frame % w;
-  display.drawDisc(x, 32, 2);
-
-  display.sendBuffer();
-
-  frame = (frame + 3) % w;
-  delay(60);
+  delay(1000);
 }
