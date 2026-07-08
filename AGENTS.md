@@ -61,5 +61,6 @@ serials are in `local/devices.md`.
 
 ## Source of truth
 
-The authoritative plan is `plans/2026-07-08-01-mvp-esp32c3-oled.md`. Read it before making
-architecture or scope decisions.
+The MVP plan (shipped as v0.1.0) is `plans/done/2026-07-08-01-mvp-esp32c3-oled.md`. Read it
+for architecture and protocol context. Next-up work (more EcoFlow stats, on-device BLE
+control) is tracked in the README roadmap until its own plan is written.
