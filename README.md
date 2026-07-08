@@ -18,7 +18,7 @@ This firmware is a BLE Central that polls one or more BLE Peripherals on a sched
 
 ![bledash reading an EcoFlow River 2 Max and an Alpicool fridge side by side](docs/bledash-ecoflow-fridge-wide.jpeg)
 
-*Reading the two real devices — EcoFlow River 2 Max (top) and Alpicool fridge (right) — from across the table over BLE.*
+*Reading the two real devices — EcoFlow River 2 Max (top) and Alpicool fridge (right) over BLE.*
 
 ![Close-up of bledash between the EcoFlow and the fridge, both showing matching readings](docs/bledash-ecoflow-fridge.jpeg)
 
