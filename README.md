@@ -39,7 +39,7 @@ The firmware is written to be portable to other ESP32 targets (S3, S2, classic E
 
 ## Quick start
 
-> ⚠️ Not runnable yet — MVP in progress. This section describes the intended workflow.
+MVP (v0.1.0) runs: fridge temperature + EcoFlow battery on one page.
 
 ```bash
 # 1. Install PlatformIO (or use the Arduino IDE with ESP32 board support 3.x+)
@@ -48,7 +48,7 @@ pipx install platformio
 # 2. Clone and configure
 git clone https://github.com/lightheaded/bledash-esp32
 cd bledash-esp32
-cp config.example.h include/config.h  # set device MAC addresses
+cp include/config.example.h include/config.h  # set the fridge MAC + EcoFlow serial
 
 # 3. Flash
 pio run -t upload
@@ -100,7 +100,7 @@ over SSH.
 Tracked as dated plan documents under [`plans/`](plans/). Each plan is a self‑contained proposal; once shipped, it moves to `plans/done/` with a link to the commits.
 
 Near term:
-- MVP: Alpicool + EcoFlow on the ESP32‑C3 MINI board (in progress — see `plans/2026-07-08-01-mvp-esp32c3-oled.md`).
+- ✅ MVP (v0.1.0): Alpicool + EcoFlow on the ESP32‑C3 MINI board — shipped. See `plans/2026-07-08-01-mvp-esp32c3-oled.md`. Remaining: M6 car install.
 - Reverse‑engineer notes for both BLE protocols, published under `docs/protocols/`.
 - Support for the LOLIN S3 Mini + 2.13″ e‑ink shield (battery‑powered v2 — see the "off‑grid" plan when it's written).
 
