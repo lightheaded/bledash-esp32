@@ -62,33 +62,44 @@ static void renderPage() {
   bool fStale = !f.valid || (now - f.lastUpdateMs > kFridgeStaleMs);
   bool bStale = !b.valid || (now - b.lastUpdateMs > kBatteryStaleMs);
   const int W = display.getDisplayWidth();  // 72
-  const int split = 37;
-  const int leftW = split - 1;       // fridge column
-  const int rightX = split + 2;      // battery column
-  const int rightW = W - rightX;
+  // Burn-in mitigation: shift the whole frame by a small offset that advances
+  // every few minutes, so no pixel is lit in the same spot indefinitely. The
+  // layout is sized to a (W-1-MAXSHIFT)-wide safe area so shifting never clips.
+  const int MAXSHIFT = 2;
+  int step = now / 240000;  // advance every 4 minutes
+  const int sx = step % (MAXSHIFT + 1);
+  const int sy = (step / (MAXSHIFT + 1)) % (MAXSHIFT + 1);
+
+  const int Weff = W - 1 - MAXSHIFT;  // safe drawable width
+  const int split = 36;
+  const int leftW = split - 1;        // fridge column
+  const int rightX = split + 2;       // battery column
+  const int rightW = Weff - rightX;
+  const int topY = 6 + sy;
+  const int bigY = 34 + sy;
 
   display.clearBuffer();
 
   // --- Left column: fridge ---
   display.setFont(u8g2_font_5x7_tf);
   const char* st = fStale ? (fridge.connected() ? ".." : "off") : (f.poweredOn ? "ON" : "OFF");
-  display.drawStr(0, 7, st);                                   // top-left: on/off
+  display.drawStr(sx, topY, st);                               // top-left: on/off
   char sp[8];                                                  // top-right: setpoint + unit
   if (fStale) snprintf(sp, sizeof(sp), "\xb0" "C");
   else snprintf(sp, sizeof(sp), "%d\xb0" "C", f.targetTemp);
-  display.drawStr(leftW - display.getStrWidth(sp), 7, sp);
+  display.drawStr(sx + leftW - display.getStrWidth(sp), topY, sp);
   char temp[8];
   snprintf(temp, sizeof(temp), fStale ? "--" : "%d", f.actualTemp);
-  if (fStale) drawBigCentered(0, leftW, 36, temp);
-  else drawBigTemp(0, leftW, 36, temp);
+  if (fStale) drawBigCentered(sx, leftW, bigY, temp);
+  else drawBigTemp(sx, leftW, bigY, temp);
 
   // --- Right column: battery ---
   display.setFont(u8g2_font_5x7_tf);
   const char* batTitle = "BATT %";
-  display.drawStr(rightX + (rightW - display.getStrWidth(batTitle)) / 2, 7, batTitle);
+  display.drawStr(sx + rightX + (rightW - display.getStrWidth(batTitle)) / 2, topY, batTitle);
   char pct[8];
   snprintf(pct, sizeof(pct), bStale ? "--" : "%d", b.percent);
-  drawBigCentered(rightX, rightW, 36, pct);
+  drawBigCentered(sx + rightX, rightW, bigY, pct);
 
   display.sendBuffer();
 }
@@ -96,7 +107,7 @@ static void renderPage() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== bledash M4: fridge + battery ===");
+  Serial.println("\n=== bledash: fridge + battery ===");
 
   Wire.begin(OLED_SDA, OLED_SCL);
   display.begin();
