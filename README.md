@@ -4,13 +4,25 @@ Tiny ESP32 firmware that connects to your Bluetooth Low Energy (BLE) devices, po
 
 Built for a very specific use case (see [MVP scope](#mvp-scope)) but designed so you can add support for more BLE devices, more screens, and more targets over time.
 
-**Status:** early / MVP. First supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. First supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+**Status:** MVP shipped ([v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0)). First supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. First supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+
+![bledash on the ESP32-C3: fridge at 4°C (set 2°C, ON) and EcoFlow battery at 98%](docs/bledash-front.jpeg)
+
+*One glance: fridge is ON at 4 °C (set 2 °C), battery at 98 %.*
 
 ## Why
 
 Vendor apps for BLE gear (fridges, power stations, chargers, scales, sensors) are all similarly annoying — you unlock your phone, open a proprietary app, wait for BLE pairing, look at a fancy but slow UI, close it. If all you want is *"what temp is the fridge, what's the SoC on the battery"*, an always-on tiny screen wins.
 
 This firmware is a BLE Central that polls one or more BLE Peripherals on a schedule and renders their key metrics on a small OLED. No phone, no cloud, no vendor account.
+
+![bledash reading an EcoFlow River 2 Max and an Alpicool fridge side by side](docs/bledash-ecoflow-fridge-wide.jpeg)
+
+*Reading the two real devices — EcoFlow River 2 Max (top) and Alpicool fridge (right) — from across the table over BLE.*
+
+![Close-up of bledash between the EcoFlow and the fridge, both showing matching readings](docs/bledash-ecoflow-fridge.jpeg)
+
+*The board's readings track both devices' own displays.*
 
 ## MVP scope
 
@@ -34,6 +46,10 @@ The MVP targets one specific board because it was €3.34 on AliExpress and it w
   - Onboard 72×40 SSD1306 OLED (I²C, addr `0x3C`)
   - USB Type‑C, ceramic antenna
   - Widely cloned; sold under a dozen names
+
+![Back of the ESP32-C3 MINI board](docs/bledash-back.jpeg)
+
+*Back of the board: the ESP32‑C3 module, ceramic antenna, and USB‑C.*
 
 The firmware is written to be portable to other ESP32 targets (S3, S2, classic ESP32) as long as they have BLE and some sort of I²C/SPI display. PRs welcome.
 
@@ -99,20 +115,30 @@ over SSH.
 
 Tracked as dated plan documents under [`plans/`](plans/). Each plan is a self‑contained proposal; once shipped, it moves to `plans/done/` with a link to the commits.
 
-Near term:
-- ✅ MVP (v0.1.0): Alpicool + EcoFlow on the ESP32‑C3 MINI board — shipped. See `plans/2026-07-08-01-mvp-esp32c3-oled.md`. Remaining: M6 car install.
-- Reverse‑engineer notes for both BLE protocols, published under `docs/protocols/`.
-- Support for the LOLIN S3 Mini + 2.13″ e‑ink shield (battery‑powered v2 — see the "off‑grid" plan when it's written).
+Done:
+- ✅ MVP (v0.1.0): Alpicool + EcoFlow on the ESP32‑C3 MINI board — see [`plans/done/2026-07-08-01-mvp-esp32c3-oled.md`](plans/done/2026-07-08-01-mvp-esp32c3-oled.md). Remaining from that plan: M6 car install.
+- ✅ Reverse‑engineer notes for both BLE protocols, published under [`docs/protocols/`](docs/protocols/).
+
+Next up:
+- **More EcoFlow stats** — input W, output W, and remaining time. These aren't in the advertisement; they need the authenticated encrypted GATT session (ECDH + protobuf), which no ESP32 implementation exists for yet. See the Tier 2 notes in [`docs/protocols/ecoflow.md`](docs/protocols/ecoflow.md).
+- **On‑device control over BLE** — use the board's two buttons (BOOT + a free GPIO) to turn the fridge and the EcoFlow on/off. The Alpicool write path is already known (see `docs/protocols/alpicool.md`); the EcoFlow side depends on the Tier 2 session above.
 
 Later:
+- Support for the LOLIN S3 Mini + 2.13″ e‑ink shield (battery‑powered v2 — separate plan when the hardware lands).
 - MQTT bridge (optional WiFi mode for home use).
 - Web config page over SoftAP for setting device MACs without a rebuild.
 - Add more supported devices — smart plugs, ATC/pvvx thermometers, BLE scales.
 
 ## Related work / prior art
 
-- **Alpicool BLE protocol** — reverse‑engineered by various community efforts; `docs/protocols/alpicool.md` will link to the ones this project drew from.
-- **EcoFlow local API** — the `ecoflow-mqtt` and `hassio-ecoflow` projects have documented the LAN protocol; the BLE protocol is less well documented.
+This project stands entirely on other people's reverse‑engineering. The Alpicool driver was ported from the byte layout in a working Home Assistant integration; the EcoFlow advertisement parser draws on the community projects below.
+
+- **Alpicool BLE** — [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble), the Home Assistant integration whose `FE FE` framing and status byte layout this project's driver is built from. Details in [`docs/protocols/alpicool.md`](docs/protocols/alpicool.md).
+- **EcoFlow BLE** —
+  - [npike/ha-ecoflow-ble](https://github.com/npike/ha-ecoflow-ble) — passive advertisement parsing (manufacturer ID, serial, battery byte); the basis for this project's Tier 1 battery reading.
+  - [rabits/ha-ef-ble](https://github.com/rabits/ha-ef-ble) and [rabits/ef-ble-reverse](https://github.com/rabits/ef-ble-reverse) — the authenticated GATT protocol (River 2 Max supported), for the deferred Tier 2 watts/remaining‑time work.
+  - [avaver/ecoflow-ble](https://github.com/avaver/ecoflow-ble) and [nielsole/ecoflow-bt-reverse-engineering](https://github.com/nielsole/ecoflow-bt-reverse-engineering) — earlier Delta‑2‑era protocol notes.
+- **EcoFlow local API** — [`ecoflow-mqtt`](https://github.com/tolwi/hassio-ecoflow-cloud) and `hassio-ecoflow` documented the LAN/cloud protocol (not used here, but useful cross‑reference).
 - **ATC / pvvx firmware** for Xiaomi thermometers — inspiration for the "small device, big number, glanceable" UI philosophy.
 
 ## Contributing
@@ -129,5 +155,6 @@ MIT — see [`LICENSE`](LICENSE).
 
 ## Acknowledgements
 
-- The various anonymous forum posters who reverse‑engineered the Alpicool and EcoFlow BLE payloads.
-- The ESP32 Arduino BLE library maintainers.
+- [@Gruni22](https://github.com/Gruni22) for the Alpicool BLE reverse‑engineering (`alpicool_ha_ble`).
+- [@npike](https://github.com/npike), [@rabits](https://github.com/rabits), [@avaver](https://github.com/avaver), and [@nielsole](https://github.com/nielsole) for the EcoFlow BLE reverse‑engineering the EcoFlow parser builds on.
+- [olikraus](https://github.com/olikraus/u8g2) (u8g2) and [h2zero](https://github.com/h2zero/NimBLE-Arduino) (NimBLE‑Arduino) for the display and BLE libraries.
