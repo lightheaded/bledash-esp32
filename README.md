@@ -4,7 +4,7 @@ Tiny ESP32 firmware that connects to your Bluetooth Low Energy (BLE) devices, po
 
 Built for a very specific use case (see [MVP scope](#mvp-scope)) but designed so you can add support for more BLE devices, more screens, and more targets over time.
 
-**Status:** early / MVP. First supported devices: **Alpicool** car fridges and **EcoFlow River 2** power stations. First supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+**Status:** early / MVP. First supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. First supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
 
 ## Why
 
@@ -17,10 +17,10 @@ This firmware is a BLE Central that polls one or more BLE Peripherals on a sched
 - **Hardware:** ESP32‑C3 "MINI" board (2.4 GHz WiFi, BLE 5.0, 4 MB flash, ceramic antenna, USB Type‑C, onboard 0.42″ SSD1306 OLED, 72×40 px).
 - **Power:** 5 V via USB‑C from the car's USB port (always‑on while the car is on).
 - **Devices:**
-  - Alpicool K‑series 12/24V compressor fridge — target temp, actual temp, battery‑protection mode, on/off.
-  - EcoFlow River 2 portable power station — battery %, input W, output W, remaining time.
-- **UI:** rotating pages on the 72×40 display, one device per page, 3‑second dwell.
-- **Cycle:** poll each device once per minute, sleep the radio between polls.
+  - Alpicool K‑series 12/24V compressor fridge — target temp, actual temp, on/off (via a held BLE connection).
+  - EcoFlow River 2 Max portable power station — battery % (parsed passively from BLE advertisements; watts require an authenticated encrypted session and are deferred).
+- **UI:** single page on the 72×40 display showing both devices (fridge temp + battery %); rotating pages only as fallback.
+- **Cycle:** refresh each device once per minute.
 
 **Non‑goals (for MVP):** battery‑powered operation, e‑ink display, web UI, cloud sync, MQTT bridge, OTA updates, multi‑fridge support. Some of these are on the roadmap; see [`plans/`](plans/).
 
@@ -54,6 +54,46 @@ cp config.example.h include/config.h  # set device MAC addresses
 pio run -t upload
 pio device monitor
 ```
+
+## Development — BLE connection contention
+
+The Alpicool K25 accepts **one BLE connection at a time** and stops advertising while
+connected. Anything else already talking to the fridge will block this firmware from
+connecting (and vice versa). Before flashing/testing against the fridge, free the
+connection slot:
+
+**1. Release the fridge from Home Assistant.** If you run the `alpicool_ble` integration,
+HA holds a persistent connection and retries forever. A helper toggles it for you over
+Home Assistant's WebSocket API — no clicking through the HA UI:
+
+```bash
+scripts/ha-alpicool.py status    # show current state
+scripts/ha-alpicool.py disable   # before a dev/test session
+scripts/ha-alpicool.py enable    # ALWAYS re-enable when done
+```
+
+One-time setup: create `local/ha.env` (gitignored) with your HA host and a long-lived
+token (HA profile → Security → Long-lived access tokens):
+
+```
+HA_HOST=<ha ip or hostname>
+HA_TOKEN=<long-lived access token>
+```
+
+The script uses [`uv`](https://docs.astral.sh/uv/) (it self-installs its one dependency via
+the inline script header). Config-entry disable is a WebSocket-only operation and the HA
+OS SSH shell has no suitable client, so the helper runs from your dev machine rather than
+over SSH.
+
+**2. Force-quit the vendor phone apps.** A phone with the vendor app in the foreground
+(or backgrounded but still holding BLE) grabs the same single slot:
+
+- **Alpicool app** — force-kill it (swipe it away; don't just background it). This is the
+  one that most often steals the fridge mid-session.
+- **EcoFlow app** — the MVP only *passively scans* EcoFlow advertisements (it never
+  connects), so a running EcoFlow app usually doesn't conflict. Only force-kill it if the
+  River 2 Max stops appearing in scans or its advertised battery byte goes stale — some
+  firmware quiets the manufacturer-data advert while a central is connected.
 
 ## Roadmap
 
