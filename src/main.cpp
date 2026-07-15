@@ -11,6 +11,14 @@
 #include "devices/alpicool.h"
 #include "devices/ecoflow.h"
 
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+#include "devices/ecoflow_session.h"
+// A non-empty string literal is >1 byte (the NUL); "" is exactly 1.
+static_assert(sizeof(ECOFLOW_USER_ID) > 1,
+              "ECOFLOW_GATT=1 requires a non-empty ECOFLOW_USER_ID in config.h "
+              "(fetch it with scripts/ecoflow_userid.py)");
+#endif
+
 static const uint32_t kPollIntervalMs = 60000;
 static const uint32_t kScanWindowMs = 2500;
 static const uint32_t kReconnectMs = 5000;
@@ -21,6 +29,10 @@ static const uint32_t kBatteryStaleMs = 30000;
 U8G2_SSD1306_72X40_ER_F_HW_I2C display(U8G2_R0, /*reset=*/U8X8_PIN_NONE);
 AlpicoolDriver fridge;
 EcoflowMonitor battery;
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+EcoflowSession ecoflowSession;
+static uint32_t lastEcoConnAttemptMs = 0;
+#endif
 
 static uint32_t lastConnAttemptMs = 0;
 
@@ -61,6 +73,16 @@ static void renderPage() {
   uint32_t now = millis();
   bool fStale = !f.valid || (now - f.lastUpdateMs > kFridgeStaleMs);
   bool bStale = !b.valid || (now - b.lastUpdateMs > kBatteryStaleMs);
+  int socPct = b.percent;
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  // While we hold the GATT session the unit stops advertising, so prefer the
+  // authenticated SoC (E5 will add watts/time-to-full to the layout).
+  const EcoflowRichReading& er = ecoflowSession.reading();
+  if (ecoflowSession.authenticated() && er.haveSoc) {
+    socPct = (int)(er.soc + 0.5f);
+    bStale = false;
+  }
+#endif
   const int W = display.getDisplayWidth();  // 72
   // Burn-in mitigation: shift the whole frame by a small offset that advances
   // every few minutes, so no pixel is lit in the same spot indefinitely. The
@@ -98,7 +120,7 @@ static void renderPage() {
   const char* batTitle = "BATT %";
   display.drawStr(sx + rightX + (rightW - display.getStrWidth(batTitle)) / 2, topY, batTitle);
   char pct[8];
-  snprintf(pct, sizeof(pct), bStale ? "--" : "%d", b.percent);
+  snprintf(pct, sizeof(pct), bStale ? "--" : "%d", socPct);
   drawBigCentered(sx + rightX, rightW, bigY, pct);
 
   display.sendBuffer();
@@ -121,6 +143,10 @@ void setup() {
   fridge.begin(ALPICOOL_MAC, kPollIntervalMs);
   battery.begin(ECOFLOW_SERIAL);
   Serial.printf("Fridge %s, EcoFlow serial %s\n", ALPICOOL_MAC, ECOFLOW_SERIAL);
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  ecoflowSession.begin(ECOFLOW_SERIAL, ECOFLOW_USER_ID);
+  Serial.println("EcoFlow GATT telemetry: ENABLED (advanced)");
+#endif
 }
 
 void loop() {
@@ -129,10 +155,16 @@ void loop() {
   NimBLEScanResults res = scan->getResults(kScanWindowMs, false);
 
   const NimBLEAdvertisedDevice* fridgeDev = nullptr;
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  const NimBLEAdvertisedDevice* ecoDev = nullptr;
+#endif
   for (int i = 0; i < res.getCount(); i++) {
     const NimBLEAdvertisedDevice* d = res.getDevice(i);
     battery.onAdvertisement(d);
     if (fridge.matches(d)) fridgeDev = d;
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+    if (ecoflowSession.matches(d)) ecoDev = d;
+#endif
   }
 
   uint32_t now = millis();
@@ -141,21 +173,48 @@ void loop() {
     lastConnAttemptMs = now;
     fridge.connectTo(fridgeDev);
   }
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  // The EcoFlow stops advertising while we hold the connection, so it only
+  // reappears in the scan after a drop — then we reconnect.
+  if (!ecoflowSession.connected() && ecoDev &&
+      (lastEcoConnAttemptMs == 0 || now - lastEcoConnAttemptMs >= kReconnectMs)) {
+    lastEcoConnAttemptMs = now;
+    ecoflowSession.connectTo(ecoDev);
+  }
+#endif
   scan->clearResults();
 
   fridge.poll();
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  ecoflowSession.poll();
+#endif
   renderPage();
 
   // Log a status line only when something changes, so the serial console stays
   // useful on this otherwise headless device without spamming every loop.
   const FridgeReading& f = fridge.reading();
   const BatteryReading& b = battery.reading();
-  static char last[96] = "";
-  char line[96];
+  static char last[192] = "";
+  char line[192];
   snprintf(line, sizeof(line),
            "fridge: conn=%d valid=%d %d/%d on=%d | batt: valid=%d %d%%",
            fridge.connected(), f.valid, f.actualTemp, f.targetTemp, f.poweredOn,
            b.valid, b.percent);
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  const EcoflowRichReading& er = ecoflowSession.reading();
+  const char* stStr = er.state == EcoflowRichReading::Charge::kCharging      ? "chg"
+                      : er.state == EcoflowRichReading::Charge::kDischarging ? "dsg"
+                      : er.state == EcoflowRichReading::Charge::kIdle        ? "idle"
+                                                                            : "?";
+  size_t used = strlen(line);
+  snprintf(line + used, sizeof(line) - used,
+           " | eco: conn=%d auth=%d %s in=%dW out=%dW soc=%.1f full=%umin",
+           ecoflowSession.connected(), ecoflowSession.authenticated(), stStr,
+           er.haveInputWatts ? (int)er.inputWatts : -1,
+           er.haveOutputWatts ? (int)er.outputWatts : -1,
+           er.haveSoc ? er.soc : -1.0f,
+           er.haveChargeRemainMin ? er.chargeRemainMin : 0u);
+#endif
   if (strcmp(line, last) != 0) {
     strcpy(last, line);
     Serial.printf("[page] %s\n", line);
