@@ -1,3 +1,6 @@
+#include "devices/ecoflow_build.h"
+#if ECOFLOW_ENABLE_GATT_TU
+
 #include "devices/ecoflow_crypto.h"
 
 #include <string.h>
@@ -343,3 +346,5 @@ void buildAuthPayload(const char* userId, const char* serial, uint8_t out[32]) {
 }
 
 }  // namespace ecoflow
+
+#endif  // ECOFLOW_ENABLE_GATT_TU

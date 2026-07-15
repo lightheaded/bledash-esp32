@@ -66,12 +66,14 @@ def main() -> int:
             "// same table shipped openly in rabits/ha-ef-ble (eflib/keydata.py) and\n"
             "// rabits/ef-ble-reverse (login_key.bin). GENERATED — do not edit by hand.\n"
             "// Regenerate: scripts/gen_ecoflow_keytable.py\n"
+            '#include "devices/ecoflow_build.h"\n'
+            "#if ECOFLOW_ENABLE_GATT_TU\n\n"
             '#include "devices/ecoflow_keytable.h"\n\n'
             "const uint8_t kEcoflowKeyTable[kEcoflowKeyTableLen] = {\n"
         )
         for i in range(0, len(data), 16):
             f.write("  " + "".join(f"0x{b:02x}," for b in data[i : i + 16]) + "\n")
-        f.write("};\n")
+        f.write("};\n\n#endif  // ECOFLOW_ENABLE_GATT_TU\n")
     print(f"wrote {os.path.relpath(OUT)} ({os.path.getsize(OUT)} bytes)")
     return 0
 

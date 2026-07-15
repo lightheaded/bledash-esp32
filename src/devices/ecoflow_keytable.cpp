@@ -3,6 +3,9 @@
 // same table shipped openly in rabits/ha-ef-ble (eflib/keydata.py) and
 // rabits/ef-ble-reverse (login_key.bin). GENERATED — do not edit by hand.
 // Regenerate: scripts/gen_ecoflow_keytable.py
+#include "devices/ecoflow_build.h"
+#if ECOFLOW_ENABLE_GATT_TU
+
 #include "devices/ecoflow_keytable.h"
 
 const uint8_t kEcoflowKeyTable[kEcoflowKeyTableLen] = {
@@ -4087,3 +4090,5 @@ const uint8_t kEcoflowKeyTable[kEcoflowKeyTableLen] = {
   0xdd,0x9f,0x99,0x00,0xca,0x04,0x89,0xa2,0x55,0x1b,0xa6,0x92,0xe0,0xa6,0xfc,0x92,
   0x74,0x44,0xf2,0x42,0x76,0xe5,0x79,0x4f,0x90,0x4b,0xd8,0x5a,0xd5,0x9c,0x94,0x04,
 };
+
+#endif  // ECOFLOW_ENABLE_GATT_TU

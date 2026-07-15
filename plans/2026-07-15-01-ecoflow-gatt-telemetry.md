@@ -1,11 +1,11 @@
 # EcoFlow River 2 Max — authenticated GATT telemetry (watts, charge state, time-to-full)
 
 - **Date:** 2026-07-15
-- **Status:** 🚧 in progress — **E1–E3 done and host-verified** (25 native unit
-  tests pass, `pio test -e native`). The micro-ecc↔NimBLE symbol collision (E4's first
-  task) is **resolved and verified** on the device toolchain (see E4). `userId` is
-  provisioned. Remaining: the live on-device NimBLE session (E4), telemetry+display
-  (E5), coexistence (E6) — all need the physical board and the phone app closed.
+- **Status:** 🚧 in progress — **E1–E3 done and host-verified** (25 native unit tests
+  pass). Symbol collision resolved. `userId` provisioned. **E4 session code written and
+  building** on the C3 (opt-in via `ECOFLOW_GATT`; verified it strips cleanly when off) —
+  but **not yet run against real hardware** (`LIVE-TUNE` spots remain). Next: flash and
+  drive E4 at the board with the phone app closed, then E5 display, E6 coexistence.
 - **Depends on:** shipped MVP (v0.1.0). Extends the existing passive-advert battery
   reading with a full authenticated GATT session.
 - **Motivation:** off-grid use (solar charging at a campsite / beach). The user wants to
@@ -205,8 +205,16 @@ system, not designing new security.
   still pass with the vendored copy. `${ecc.build_flags}` and the crypto/keytable sources
   are back in the device build.
 
-  **Remaining E4 work** (needs the physical board + phone app closed): the live NimBLE
-  session.
+  **E4 session written** (`ecoflow_session.{h,cpp}`, wired into `main.cpp` behind
+  `ECOFLOW_GATT`): NimBLE client that connects, discovers the rfcomm chars, subscribes,
+  runs the ECDH → key-info → auth handshake state machine off the host-tested primitives,
+  reassembles `0x5A5A` frames, decrypts data frames, decodes heartbeats into
+  `EcoflowRichReading`, and derives charge state from in/out watts. Builds for the C3
+  (Flash 47.5% with GATT on, 41.3% off — the opt-out genuinely strips the heavy TUs via
+  `ecoflow_build.h`). **Not yet run against hardware** — the spots that can only be
+  confirmed live are marked `LIVE-TUNE` in the source: notification→EncPacket reassembly,
+  whether pubkey/key-info come as command vs data frames, the packet-ack echo (left
+  commented out until confirmed it doesn't loop), and the time-sync reply format.
 - **E5 — Telemetry parse + display.** Extend `EcoflowMonitor`/reading with `chargingWatts`,
   `dischargingWatts`, `socPreciseTenths`, `minutesToFull`, and a charge state. Redesign the
   right column (72×40 is tiny): SoC big + a compact charge line, e.g. `↑ 96W  1:20` when
