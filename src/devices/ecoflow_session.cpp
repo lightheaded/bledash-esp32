@@ -106,8 +106,9 @@ bool EcoflowSession::connectTo(const NimBLEAdvertisedDevice* dev) {
 // ---------------- framing ----------------
 
 void EcoflowSession::onNotify(const uint8_t* data, size_t len) {
-  // LIVE-TUNE: confirm the device fragments EncPackets across notifications the
-  // way this reassembly assumes (scan for 0x5A5A, length at offset 4-5).
+  // Verified on hardware: the device sends one complete EncPacket per
+  // notification (scan for 0x5A5A, length at offset 4-5). Reassembly still
+  // handles fragmentation defensively.
   buf_.insert(buf_.end(), data, data + len);
   if (buf_.size() > 1024) buf_.clear();  // runaway guard
 
@@ -129,13 +130,31 @@ void EcoflowSession::onNotify(const uint8_t* data, size_t len) {
     size_t total = (size_t)lenField + 6;  // header(6) + payload + crc(2)
     if (buf_.size() < total) return;      // wait for the rest
 
+    // Copy the complete frame out (alloc here, in the callback task) and hand it
+    // to poll() — do NOT decode/handle here, since handlers write to the link.
+    std::vector<uint8_t> frame(buf_.begin(), buf_.begin() + total);
+    buf_.erase(buf_.begin(), buf_.begin() + total);
+    portENTER_CRITICAL(&notifyMux_);
+    pendingFrames_.push_back(std::move(frame));  // O(1) move under lock
+    portEXIT_CRITICAL(&notifyMux_);
+  }
+}
+
+// Drain frames buffered by the notify callback and process them in the main-loop
+// context (where blocking BLE writes are safe). Called from poll().
+void EcoflowSession::processPending() {
+  std::vector<std::vector<uint8_t>> local;
+  portENTER_CRITICAL(&notifyMux_);
+  local.swap(pendingFrames_);  // O(1) pointer swap; no alloc under lock
+  portEXIT_CRITICAL(&notifyMux_);
+
+  for (auto& raw : local) {
     ecoflow::EncFrame frame;
-    if (ecoflow::decodeEncPacket(buf_.data(), total, frame)) {
+    if (ecoflow::decodeEncPacket(raw.data(), raw.size(), frame)) {
       handleEncFrame(frame);
     } else {
       Serial.println("[ecoflow] bad EncPacket (CRC/parse)");
     }
-    buf_.erase(buf_.begin(), buf_.begin() + total);
   }
 }
 
@@ -348,6 +367,7 @@ void EcoflowSession::handleInnerPacket(const ecoflow::Packet& pkt) {
 
 void EcoflowSession::poll() {
   if (!connected()) return;
+  processPending();  // handle any frames the notify callback buffered
   // Handshake watchdog: if we stall mid-handshake, drop so the owner retries.
   if (state_ != State::kAuthenticated && state_ != State::kDisconnected) {
     if (millis() - stateSinceMs_ > kHandshakeTimeoutMs) {
