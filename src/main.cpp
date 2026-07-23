@@ -85,36 +85,49 @@ static void drawEcoflowRich(int x0, int w, int sy, int socPct,
   snprintf(l1, sizeof(l1), "%d%%", socPct);
   display.drawStr(x0 + (w - display.getStrWidth(l1)) / 2, sy + 7, l1);
 
-  // Line 2: direction glyph + watts (input while charging, output otherwise).
+  // Line 2: watts, with a direction triangle only when actually charging or
+  // discharging (input W while charging, output W otherwise). When idle, just
+  // "0W" centered with no glyph — a leading dash reads like a minus sign.
   bool charging = er.state == EcoflowRichReading::Charge::kCharging;
   bool discharging = er.state == EcoflowRichReading::Charge::kDischarging;
-  int watts = charging ? (er.haveInputWatts ? (int)er.inputWatts : 0)
-                       : (er.haveOutputWatts ? (int)er.outputWatts : 0);
+  int watts = charging      ? (er.haveInputWatts ? (int)er.inputWatts : 0)
+              : discharging ? (er.haveOutputWatts ? (int)er.outputWatts : 0)
+                            : 0;
   char l2[8];
   snprintf(l2, sizeof(l2), "%dW", watts);
-  const int triW = 6, triH = 6;
-  int total = triW + 2 + display.getStrWidth(l2);
-  int lx = x0 + (w - total) / 2;
-  int base = sy + 22;         // baseline for the watts text
-  int triTop = base - triH;
-  if (charging) {             // ▲ into the battery
-    display.drawTriangle(lx + triW / 2, triTop, lx, base, lx + triW, base);
-  } else if (discharging) {   // ▼ out of the battery
-    display.drawTriangle(lx, triTop, lx + triW, triTop, lx + triW / 2, base);
-  } else {                    // – idle
-    display.drawHLine(lx, base - triH / 2, triW);
+  int wWidth = display.getStrWidth(l2);
+  int base = sy + 22;  // baseline for the watts text
+  if (charging || discharging) {
+    const int triW = 6, triH = 6;
+    int lx = x0 + (w - (triW + 2 + wWidth)) / 2;
+    if (charging) {  // ▲ into the battery
+      display.drawTriangle(lx + triW / 2, base - triH, lx, base, lx + triW, base);
+    } else {  // ▼ out of the battery
+      display.drawTriangle(lx, base - triH, lx + triW, base - triH, lx + triW / 2, base);
+    }
+    display.drawStr(lx + triW + 2, base, l2);
+  } else {
+    display.drawStr(x0 + (w - wWidth) / 2, base, l2);
   }
-  display.drawStr(lx + triW + 2, base, l2);
 
-  // Line 3: time remaining, H:MM. The inactive direction reads a large sentinel,
-  // so show "--:--" when idle or the value is unset/sentinel.
-  unsigned rem = charging ? (er.haveChargeRemainMin ? er.chargeRemainMin : 0)
-                          : (er.haveDischargeRemainMin ? er.dischargeRemainMin : 0);
+  // Line 3: always show a time remaining, H:MM (the EcoFlow's own screen always
+  // shows one). To-full while charging, else to-empty. The device caps the
+  // idle/near-zero-draw estimate at 5999 min, which renders as 99:59.
+  bool haveTime = false;
+  unsigned rem = 0;
+  if (charging) {
+    if (er.haveChargeRemainMin) { rem = er.chargeRemainMin; haveTime = true; }
+  } else if (er.haveDischargeRemainMin) {
+    rem = er.dischargeRemainMin;
+    haveTime = true;
+  }
   char l3[8];
-  if ((!charging && !discharging) || rem == 0 || rem >= 5999)
-    snprintf(l3, sizeof(l3), "--:--");
-  else
+  if (haveTime) {
+    if (rem > 5999) rem = 5999;
     snprintf(l3, sizeof(l3), "%u:%02u", rem / 60, rem % 60);
+  } else {
+    snprintf(l3, sizeof(l3), "--:--");
+  }
   display.drawStr(x0 + (w - display.getStrWidth(l3)) / 2, sy + 38, l3);
 }
 #endif
