@@ -4,11 +4,11 @@ Tiny ESP32 firmware that connects to your Bluetooth Low Energy (BLE) devices, po
 
 Built for a very specific use case (see [MVP scope](#mvp-scope)) but designed so you can add support for more BLE devices, more screens, and more targets over time.
 
-**Status:** MVP shipped ([v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0)). First supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. First supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+**Status:** [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0) — adds **opt‑in EcoFlow watts, charge state & time‑to‑full** over the authenticated BLE session (see below), on top of the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
 
-![bledash on the ESP32-C3: fridge at 4°C (set 2°C, ON) and EcoFlow battery at 98%](docs/bledash-front.jpeg)
+![bledash on the ESP32-C3 in the car: fridge at 6°C and EcoFlow at 90% discharging 21W](docs/bledash-ecoflow-gatt.jpeg)
 
-*One glance: fridge is ON at 4 °C (set 2 °C), battery at 98 %.*
+*One glance in the car: fridge at 6 °C (set 4°) on the left; EcoFlow at 90 %, discharging 21 W with ~15 h to empty on the right (advanced mode). The vertical bar doubles as a battery gauge.*
 
 ## Why
 
@@ -55,7 +55,7 @@ The firmware is written to be portable to other ESP32 targets (S3, S2, classic E
 
 ## Quick start
 
-MVP (v0.1.0) runs: fridge temperature + EcoFlow battery on one page.
+The default build runs fridge temperature + EcoFlow battery % on one page (no account needed); opt in to `ECOFLOW_GATT` for EcoFlow watts + time‑to‑full (see the section below).
 
 ```bash
 # 1. Install PlatformIO (or use the Arduino IDE with ESP32 board support 3.x+)
@@ -73,9 +73,9 @@ pio device monitor
 
 ## EcoFlow watts & time‑to‑full (advanced, opt‑in)
 
-![bledash showing the EcoFlow charge state](docs/bledash-ecoflow-gatt.jpeg)
+![the default battery-only view: fridge temp and EcoFlow battery at 98%](docs/bledash-front.jpeg)
 
-*Fridge at 6 °C (set 4°) on the left; EcoFlow at 90 %, discharging 21 W with ~15 h to empty on the right — the vertical bar doubles as a battery gauge and column divider.*
+*The default view — EcoFlow **battery % only**, no account or connection needed. Opt in (below) for watts + charge state + time‑to‑full, as in the shot at the top of this README.*
 
 By default bledash reads the EcoFlow **battery %** passively from its BLE advertisement — no account, no pairing, no connection. Opt in to the **authenticated GATT session** to also get **input/output watts, charge/discharge state, and time‑to‑full / time‑to‑empty**, read straight from the device (not estimated).
 
