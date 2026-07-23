@@ -1,11 +1,13 @@
 # EcoFlow River 2 Max — authenticated GATT telemetry (watts, charge state, time-to-full)
 
 - **Date:** 2026-07-15
-- **Status:** 🚧 in progress — **E1–E3 done and host-verified** (25 native unit tests
-  pass). Symbol collision resolved. `userId` provisioned. **E4 session code written and
-  building** on the C3 (opt-in via `ECOFLOW_GATT`; verified it strips cleanly when off) —
-  but **not yet run against real hardware** (`LIVE-TUNE` spots remain). Next: flash and
-  drive E4 at the board with the phone app closed, then E5 display, E6 coexistence.
+- **Status:** 🚧 in progress — **E1–E4 done; E4 VERIFIED on real hardware.** The
+  authenticated GATT session connects, handshakes, and streams decoded telemetry: observed
+  `auth OK` then `dsg in=0W out=97W soc=29.8 toEmpty=80min` (discharging into the fridge,
+  SoC ticking down as expected). As far as our research found, the first working
+  C/C++/ESP32 EcoFlow authenticated BLE session. 25 host tests pass; opt-in strips cleanly.
+  Next: E5 display layout, then E6 coexistence/robustness, then the charging-direction
+  check when solar is connected.
 - **Depends on:** shipped MVP (v0.1.0). Extends the existing passive-advert battery
   reading with a full authenticated GATT session.
 - **Motivation:** off-grid use (solar charging at a campsite / beach). The user wants to
@@ -205,16 +207,31 @@ system, not designing new security.
   still pass with the vendored copy. `${ecc.build_flags}` and the crypto/keytable sources
   are back in the device build.
 
-  **E4 session written** (`ecoflow_session.{h,cpp}`, wired into `main.cpp` behind
-  `ECOFLOW_GATT`): NimBLE client that connects, discovers the rfcomm chars, subscribes,
-  runs the ECDH → key-info → auth handshake state machine off the host-tested primitives,
-  reassembles `0x5A5A` frames, decrypts data frames, decodes heartbeats into
-  `EcoflowRichReading`, and derives charge state from in/out watts. Builds for the C3
-  (Flash 47.5% with GATT on, 41.3% off — the opt-out genuinely strips the heavy TUs via
-  `ecoflow_build.h`). **Not yet run against hardware** — the spots that can only be
-  confirmed live are marked `LIVE-TUNE` in the source: notification→EncPacket reassembly,
-  whether pubkey/key-info come as command vs data frames, the packet-ack echo (left
-  commented out until confirmed it doesn't loop), and the time-sync reply format.
+  **E4 session (`ecoflow_session.{h,cpp}`, wired into `main.cpp` behind `ECOFLOW_GATT`) —
+  VERIFIED on hardware.** NimBLE client: connect, discover rfcomm chars, subscribe, run
+  the ECDH → key-info → auth handshake off the host-tested primitives, reassemble `0x5A5A`
+  frames, decrypt data frames, decode heartbeats into `EcoflowRichReading`, derive charge
+  state from in/out watts. Flash 47.5% on / 41.3% off (opt-out strips via `ecoflow_build.h`).
+
+  Findings from bring-up (the resolved `LIVE-TUNE` questions):
+  - **NimBLE callback deadlock (critical):** driving the handshake from inside the notify
+    callback and calling a blocking `writeValue` there wedges the BLE host task (and the
+    whole loop — the watchdog never even fired). Fix: the notify callback only *buffers*
+    complete frames (guarded by a `portMUX`); all decode + writes happen in `poll()` on the
+    main task. This is the load-bearing architectural fix.
+  - **Range:** at −101 dBm (tent↔beach) the session can't come up; at −59…−71 dBm (co-located)
+    it's solid. Added an RSSI gate (`kEcoMinRssiDbm = −88`) — below it we don't grab the
+    connection (which would also stop the unit advertising) and stay on passive battery-%.
+  - **Framing:** the device sends exactly one complete EncPacket per notification. Handshake
+    pubkey + key-info arrive as command frames (type 0x00); everything post-cipher (auth
+    result, heartbeats) as data frames (type 0x10). Confirmed.
+  - **Acking not required** for the basic power heartbeats — they stream without it, so
+    `ackPacket()` stays commented out (avoids any feedback-loop risk). The reference only
+    needs acks for extra config/prediction data we don't use.
+  - **Offsets confirmed live:** SoC (BMS f32@53), out watts (PD u16@15), and discharge
+    remaining (EMS u32@21 → `toEmpty=80min`, a sane estimate) all read correctly.
+  - **Time-sync:** telemetry flows without us answering the RTC request; `sendTimeSync()`
+    is wired but its necessity for charge/discharge data is unconfirmed (harmless).
 - **E5 — Telemetry parse + display.** Extend `EcoflowMonitor`/reading with `chargingWatts`,
   `dischargingWatts`, `socPreciseTenths`, `minutesToFull`, and a charge state. Redesign the
   right column (72×40 is tiny): SoC big + a compact charge line, e.g. `↑ 96W  1:20` when

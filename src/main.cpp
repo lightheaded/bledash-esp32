@@ -22,6 +22,11 @@ static_assert(sizeof(ECOFLOW_USER_ID) > 1,
 static const uint32_t kPollIntervalMs = 60000;
 static const uint32_t kScanWindowMs = 2500;
 static const uint32_t kReconnectMs = 5000;
+// The authenticated GATT handshake needs a usable link (bidirectional writes +
+// notifications). Below this advertised RSSI we don't grab the connection —
+// which would only stall and also stop the unit advertising — and instead keep
+// reading battery % passively from advertisements, which works at longer range.
+static const int kEcoMinRssiDbm = -88;
 // Stale thresholds: fridge polls every 60 s; EcoFlow advertises continuously.
 static const uint32_t kFridgeStaleMs = 2 * kPollIntervalMs + 15000;
 static const uint32_t kBatteryStaleMs = 30000;
@@ -175,11 +180,22 @@ void loop() {
   }
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
   // The EcoFlow stops advertising while we hold the connection, so it only
-  // reappears in the scan after a drop — then we reconnect.
+  // reappears in the scan after a drop — then we reconnect. Only attempt when
+  // the link is strong enough to complete the handshake.
   if (!ecoflowSession.connected() && ecoDev &&
       (lastEcoConnAttemptMs == 0 || now - lastEcoConnAttemptMs >= kReconnectMs)) {
-    lastEcoConnAttemptMs = now;
-    ecoflowSession.connectTo(ecoDev);
+    int rssi = ecoDev->getRSSI();
+    if (rssi >= kEcoMinRssiDbm) {
+      lastEcoConnAttemptMs = now;
+      ecoflowSession.connectTo(ecoDev);
+    } else {
+      static uint32_t lastWeakLogMs = 0;
+      if (now - lastWeakLogMs > 10000) {
+        lastWeakLogMs = now;
+        Serial.printf("[ecoflow] seen at RSSI=%d dBm (< %d) — too weak for GATT, "
+                      "staying on passive battery %%\n", rssi, kEcoMinRssiDbm);
+      }
+    }
   }
 #endif
   scan->clearResults();
@@ -206,14 +222,21 @@ void loop() {
                       : er.state == EcoflowRichReading::Charge::kDischarging ? "dsg"
                       : er.state == EcoflowRichReading::Charge::kIdle        ? "idle"
                                                                             : "?";
+  // Show the remaining-time that matches the current direction (the other field
+  // reads a large sentinel value).
+  unsigned remainMin =
+      er.state == EcoflowRichReading::Charge::kCharging
+          ? (er.haveChargeRemainMin ? er.chargeRemainMin : 0u)
+          : (er.haveDischargeRemainMin ? er.dischargeRemainMin : 0u);
+  const char* remainLabel =
+      er.state == EcoflowRichReading::Charge::kCharging ? "toFull" : "toEmpty";
   size_t used = strlen(line);
   snprintf(line + used, sizeof(line) - used,
-           " | eco: conn=%d auth=%d %s in=%dW out=%dW soc=%.1f full=%umin",
+           " | eco: conn=%d auth=%d %s in=%dW out=%dW soc=%.1f %s=%umin",
            ecoflowSession.connected(), ecoflowSession.authenticated(), stStr,
            er.haveInputWatts ? (int)er.inputWatts : -1,
            er.haveOutputWatts ? (int)er.outputWatts : -1,
-           er.haveSoc ? er.soc : -1.0f,
-           er.haveChargeRemainMin ? er.chargeRemainMin : 0u);
+           er.haveSoc ? er.soc : -1.0f, remainLabel, remainMin);
 #endif
   if (strcmp(line, last) != 0) {
     strcpy(last, line);

@@ -73,7 +73,8 @@ class EcoflowSession : public NimBLEClientCallbacks {
   bool discoverChars();
 
   // --- framing helpers ---
-  void onNotify(const uint8_t* data, size_t len);      // reassembles EncPackets
+  void onNotify(const uint8_t* data, size_t len);      // reassembles EncPackets (notify task)
+  void processPending();                                // drains frames in main task
   void handleEncFrame(const ecoflow::EncFrame& frame);  // one outer frame
   void handleInnerPacket(const ecoflow::Packet& pkt);   // one decrypted inner packet
   void sendCommand(const uint8_t* payload, size_t len);       // plaintext EncPacket
@@ -106,6 +107,14 @@ class EcoflowSession : public NimBLEClientCallbacks {
   bool haveCipher_ = false;
 
   uint32_t seq_ = 0;     // outgoing inner-packet sequence
-  std::vector<uint8_t> buf_;  // notification reassembly buffer
+  std::vector<uint8_t> buf_;  // notification reassembly buffer (notify task only)
+
+  // Complete EncPacket frames handed from the notify callback (NimBLE host task)
+  // to poll() (main task). Handlers do blocking BLE writes, which MUST NOT run
+  // inside the notify callback or they deadlock the host task — so we only
+  // buffer here and process from the main loop.
+  std::vector<std::vector<uint8_t>> pendingFrames_;
+  portMUX_TYPE notifyMux_ = portMUX_INITIALIZER_UNLOCKED;
+
   EcoflowRichReading reading_;
 };
