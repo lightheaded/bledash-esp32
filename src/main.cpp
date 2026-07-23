@@ -72,6 +72,53 @@ static void drawBigTemp(int x0, int w, int baseline, const char* s) {
   display.drawStr(startX + bw, baseline - bigAsc + smallAsc, "\xb0");
 }
 
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+// Rich EcoFlow column for the authenticated GATT session: three small stacked
+// lines in the tiny right column — SoC, a direction triangle + watts, and time
+// remaining (to full when charging, to empty when discharging). x0 already
+// includes the burn-in x-shift; sy is the y-shift.
+static void drawEcoflowRich(int x0, int w, int sy, int socPct,
+                            const EcoflowRichReading& er) {
+  display.setFont(u8g2_font_5x7_tf);
+  // Line 1: SoC.
+  char l1[8];
+  snprintf(l1, sizeof(l1), "%d%%", socPct);
+  display.drawStr(x0 + (w - display.getStrWidth(l1)) / 2, sy + 7, l1);
+
+  // Line 2: direction glyph + watts (input while charging, output otherwise).
+  bool charging = er.state == EcoflowRichReading::Charge::kCharging;
+  bool discharging = er.state == EcoflowRichReading::Charge::kDischarging;
+  int watts = charging ? (er.haveInputWatts ? (int)er.inputWatts : 0)
+                       : (er.haveOutputWatts ? (int)er.outputWatts : 0);
+  char l2[8];
+  snprintf(l2, sizeof(l2), "%dW", watts);
+  const int triW = 6, triH = 6;
+  int total = triW + 2 + display.getStrWidth(l2);
+  int lx = x0 + (w - total) / 2;
+  int base = sy + 22;         // baseline for the watts text
+  int triTop = base - triH;
+  if (charging) {             // ▲ into the battery
+    display.drawTriangle(lx + triW / 2, triTop, lx, base, lx + triW, base);
+  } else if (discharging) {   // ▼ out of the battery
+    display.drawTriangle(lx, triTop, lx + triW, triTop, lx + triW / 2, base);
+  } else {                    // – idle
+    display.drawHLine(lx, base - triH / 2, triW);
+  }
+  display.drawStr(lx + triW + 2, base, l2);
+
+  // Line 3: time remaining, H:MM. The inactive direction reads a large sentinel,
+  // so show "--:--" when idle or the value is unset/sentinel.
+  unsigned rem = charging ? (er.haveChargeRemainMin ? er.chargeRemainMin : 0)
+                          : (er.haveDischargeRemainMin ? er.dischargeRemainMin : 0);
+  char l3[8];
+  if ((!charging && !discharging) || rem == 0 || rem >= 5999)
+    snprintf(l3, sizeof(l3), "--:--");
+  else
+    snprintf(l3, sizeof(l3), "%u:%02u", rem / 60, rem % 60);
+  display.drawStr(x0 + (w - display.getStrWidth(l3)) / 2, sy + 38, l3);
+}
+#endif
+
 static void renderPage() {
   const FridgeReading& f = fridge.reading();
   const BatteryReading& b = battery.reading();
@@ -81,7 +128,7 @@ static void renderPage() {
   int socPct = b.percent;
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
   // While we hold the GATT session the unit stops advertising, so prefer the
-  // authenticated SoC (E5 will add watts/time-to-full to the layout).
+  // authenticated SoC; the rich column below adds watts + time remaining.
   const EcoflowRichReading& er = ecoflowSession.reading();
   if (ecoflowSession.authenticated() && er.haveSoc) {
     socPct = (int)(er.soc + 0.5f);
@@ -120,13 +167,22 @@ static void renderPage() {
   if (fStale) drawBigCentered(sx, leftW, bigY, temp);
   else drawBigTemp(sx, leftW, bigY, temp);
 
-  // --- Right column: battery ---
-  display.setFont(u8g2_font_5x7_tf);
-  const char* batTitle = "BATT %";
-  display.drawStr(sx + rightX + (rightW - display.getStrWidth(batTitle)) / 2, topY, batTitle);
-  char pct[8];
-  snprintf(pct, sizeof(pct), bStale ? "--" : "%d", socPct);
-  drawBigCentered(sx + rightX, rightW, bigY, pct);
+  // --- Right column: battery (passive %) or rich EcoFlow (authenticated GATT) ---
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  if (ecoflowSession.authenticated() &&
+      (er.haveSoc || er.haveInputWatts || er.haveOutputWatts)) {
+    drawEcoflowRich(sx + rightX, rightW, sy, socPct, er);
+  } else
+#endif
+  {
+    display.setFont(u8g2_font_5x7_tf);
+    const char* batTitle = "BATT %";
+    display.drawStr(sx + rightX + (rightW - display.getStrWidth(batTitle)) / 2, topY,
+                    batTitle);
+    char pct[8];
+    snprintf(pct, sizeof(pct), bStale ? "--" : "%d", socPct);
+    drawBigCentered(sx + rightX, rightW, bigY, pct);
+  }
 
   display.sendBuffer();
 }
