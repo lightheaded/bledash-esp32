@@ -72,47 +72,67 @@ static void drawBigTemp(int x0, int w, int baseline, const char* s) {
   display.drawStr(startX + bw, baseline - bigAsc + smallAsc, "\xb0");
 }
 
+// Big battery %: number in logisoso16 with a small "%" in 6x10, centered on the
+// given baseline. Shared by the passive-% and rich EcoFlow views.
+static void drawBattPct(int x0, int w, int baseline, int pct, bool stale) {
+  if (stale) {
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawStr(x0 + (w - display.getStrWidth("--")) / 2, baseline, "--");
+    return;
+  }
+  char num[6];
+  snprintf(num, sizeof(num), "%d", pct);
+  display.setFont(u8g2_font_logisoso16_tr);
+  int nw = display.getStrWidth(num);
+  display.setFont(u8g2_font_6x10_tf);
+  int pw = display.getStrWidth("%");
+  int startX = x0 + (w - (nw + pw)) / 2;
+  if (startX < x0) startX = x0;
+  display.setFont(u8g2_font_logisoso16_tr);
+  display.drawStr(startX, baseline, num);
+  display.setFont(u8g2_font_6x10_tf);
+  display.drawStr(startX + nw, baseline, "%");
+}
+
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
-// Rich EcoFlow column for the authenticated GATT session: three small stacked
-// lines in the tiny right column — SoC, a direction triangle + watts, and time
-// remaining (to full when charging, to empty when discharging). x0 already
-// includes the burn-in x-shift; sy is the y-shift.
+// Rich EcoFlow column for the authenticated GATT session: big SoC % on top, then
+// a direction triangle + watts, then time remaining. x0 already includes the
+// burn-in x-shift; sy is the y-shift. The vertical bar (drawn by renderPage)
+// carries the at-a-glance level and separates the two columns.
 static void drawEcoflowRich(int x0, int w, int sy, int socPct,
                             const EcoflowRichReading& er) {
-  display.setFont(u8g2_font_5x7_tf);
-  // Line 1: SoC.
-  char l1[8];
-  snprintf(l1, sizeof(l1), "%d%%", socPct);
-  display.drawStr(x0 + (w - display.getStrWidth(l1)) / 2, sy + 7, l1);
-
-  // Line 2: watts, with a direction triangle only when actually charging or
-  // discharging (input W while charging, output W otherwise). When idle, just
-  // "0W" centered with no glyph — a leading dash reads like a minus sign.
   bool charging = er.state == EcoflowRichReading::Charge::kCharging;
   bool discharging = er.state == EcoflowRichReading::Charge::kDischarging;
+
+  // Top: SoC %, big.
+  drawBattPct(x0, w, sy + 16, socPct, false);
+
+  // Middle: watts, with a direction triangle when charging/discharging; idle is
+  // plain "0W" (no glyph — a dash reads like a minus).
   int watts = charging      ? (er.haveInputWatts ? (int)er.inputWatts : 0)
               : discharging ? (er.haveOutputWatts ? (int)er.outputWatts : 0)
                             : 0;
+  display.setFont(u8g2_font_6x10_tf);
   char l2[8];
   snprintf(l2, sizeof(l2), "%dW", watts);
   int wWidth = display.getStrWidth(l2);
-  int base = sy + 22;  // baseline for the watts text
+  int base = sy + 28;
   if (charging || discharging) {
-    const int triW = 6, triH = 6;
+    const int triW = 5, triH = 7;
     int lx = x0 + (w - (triW + 2 + wWidth)) / 2;
+    int triTop = base - 8;
     if (charging) {  // ▲ into the battery
-      display.drawTriangle(lx + triW / 2, base - triH, lx, base, lx + triW, base);
+      display.drawTriangle(lx + triW / 2, triTop, lx, triTop + triH, lx + triW, triTop + triH);
     } else {  // ▼ out of the battery
-      display.drawTriangle(lx, base - triH, lx + triW, base - triH, lx + triW / 2, base);
+      display.drawTriangle(lx, triTop, lx + triW, triTop, lx + triW / 2, triTop + triH);
     }
     display.drawStr(lx + triW + 2, base, l2);
   } else {
     display.drawStr(x0 + (w - wWidth) / 2, base, l2);
   }
 
-  // Line 3: always show a time remaining, H:MM (the EcoFlow's own screen always
-  // shows one). To-full while charging, else to-empty. The device caps the
-  // idle/near-zero-draw estimate at 5999 min, which renders as 99:59.
+  // Bottom: time remaining, H:MM, always shown (to-full charging, else to-empty;
+  // the device caps the idle estimate at 5999 -> 99:59).
   bool haveTime = false;
   unsigned rem = 0;
   if (charging) {
@@ -121,14 +141,15 @@ static void drawEcoflowRich(int x0, int w, int sy, int socPct,
     rem = er.dischargeRemainMin;
     haveTime = true;
   }
-  char l3[8];
+  display.setFont(u8g2_font_5x7_tf);
+  char l3[10];
   if (haveTime) {
     if (rem > 5999) rem = 5999;
     snprintf(l3, sizeof(l3), "%u:%02u", rem / 60, rem % 60);
   } else {
     snprintf(l3, sizeof(l3), "--:--");
   }
-  display.drawStr(x0 + (w - display.getStrWidth(l3)) / 2, sy + 38, l3);
+  display.drawStr(x0 + (w - display.getStrWidth(l3)) / 2, sy + 37, l3);
 }
 #endif
 
@@ -158,23 +179,28 @@ static void renderPage() {
   const int sy = (step / (MAXSHIFT + 1)) % (MAXSHIFT + 1);
 
   const int Weff = W - 1 - MAXSHIFT;  // safe drawable width
-  const int split = 36;
-  const int leftW = split - 1;        // fridge column
-  const int rightX = split + 2;       // battery column
+  const int leftW = 32;               // fridge column (x 0..31)
+  const int vbarX = 33;               // vertical SoC bar; doubles as separator
+  const int vbarW = 4;
+  const int rightX = 39;              // EcoFlow / battery column
   const int rightW = Weff - rightX;
-  const int topY = 6 + sy;
-  const int bigY = 34 + sy;
+  const int bigY = 24 + sy;           // fridge temp, raised toward the top
+  const int spY = 37 + sy;            // setpoint, lower-left
 
   display.clearBuffer();
 
   // --- Left column: fridge ---
+  // Lower-left: setpoint normally; "OFF" when the compressor is off; ".." while
+  // (re)connecting. No "ON" — a shown temperature already implies it's running.
   display.setFont(u8g2_font_5x7_tf);
-  const char* st = fStale ? (fridge.connected() ? ".." : "off") : (f.poweredOn ? "ON" : "OFF");
-  display.drawStr(sx, topY, st);                               // top-left: on/off
-  char sp[8];                                                  // top-right: setpoint + unit
-  if (fStale) snprintf(sp, sizeof(sp), "\xb0" "C");
-  else snprintf(sp, sizeof(sp), "%d\xb0" "C", f.targetTemp);
-  display.drawStr(sx + leftW - display.getStrWidth(sp), topY, sp);
+  char sp[8];
+  if (fStale)
+    snprintf(sp, sizeof(sp), "%s", fridge.connected() ? ".." : "");
+  else if (!f.poweredOn)
+    snprintf(sp, sizeof(sp), "OFF");
+  else
+    snprintf(sp, sizeof(sp), "%d\xb0", f.targetTemp);
+  display.drawStr(sx, spY, sp);
   char temp[8];
   snprintf(temp, sizeof(temp), fStale ? "--" : "%d", f.actualTemp);
   if (fStale) drawBigCentered(sx, leftW, bigY, temp);
@@ -188,13 +214,19 @@ static void renderPage() {
   } else
 #endif
   {
-    display.setFont(u8g2_font_5x7_tf);
-    const char* batTitle = "BATT %";
-    display.drawStr(sx + rightX + (rightW - display.getStrWidth(batTitle)) / 2, topY,
-                    batTitle);
-    char pct[8];
-    snprintf(pct, sizeof(pct), bStale ? "--" : "%d", socPct);
-    drawBigCentered(sx + rightX, rightW, bigY, pct);
+    // Passive battery-% only (GATT off or not yet authenticated): big % centered.
+    drawBattPct(sx + rightX, rightW, sy + 24, socPct, bStale);
+  }
+
+  // --- Vertical SoC bar down the middle: at-a-glance level + column separator,
+  // draining from the top as the battery drains ---
+  const int barTop = sy;
+  const int barH = 38;  // full height minus the burn-in shift range
+  display.drawFrame(sx + vbarX, barTop, vbarW, barH);
+  if (!bStale) {
+    int pct = socPct < 0 ? 0 : (socPct > 100 ? 100 : socPct);
+    int fillH = (barH - 2) * pct / 100;
+    display.drawBox(sx + vbarX + 1, barTop + 1 + (barH - 2 - fillH), vbarW - 2, fillH);
   }
 
   display.sendBuffer();
