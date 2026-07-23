@@ -71,6 +71,34 @@ pio run -t upload
 pio device monitor
 ```
 
+## EcoFlow watts & time‑to‑full (advanced, opt‑in)
+
+![bledash showing the EcoFlow charge state](docs/bledash-ecoflow-gatt.jpeg)
+
+*Fridge at 4 °C (set 4°) on the left; EcoFlow at 90 %, current draw, and time remaining on the right — with the vertical bar doubling as a battery gauge and column divider.*
+
+By default bledash reads the EcoFlow **battery %** passively from its BLE advertisement — no account, no pairing, no connection. Opt in to the **authenticated GATT session** to also get **input/output watts, charge/discharge state, and time‑to‑full / time‑to‑empty**, read straight from the device (not estimated).
+
+As far as we found, this is the first C/C++/ESP32 port of EcoFlow's authenticated BLE protocol (a legacy **secp160r1** ECDH handshake + a vendor key table + AES‑CBC, on top of the River 2 fixed‑offset heartbeat structs). Enable it in `include/config.h`:
+
+```c
+#define ECOFLOW_GATT     1
+#define ECOFLOW_USER_ID  "1234567890123456789"   // your EcoFlow account userId
+```
+
+Fetch your `userId` once (it's a static per‑account value, reusable offline afterwards):
+
+```bash
+scripts/ecoflow_userid.py you@example.com 'password'   # add --host api-e.ecoflow.com for EU accounts
+```
+
+Caveats worth knowing:
+- **Range.** The session needs a usable link (roughly ≥ −85 dBm). Farther than that, bledash stays on the passive battery‑% — the advertisement carries across a campsite, a full GATT session does not.
+- **One BLE central.** While bledash holds the session the EcoFlow **phone app can't connect**, and vice‑versa.
+- **Off by default, zero cost.** With `ECOFLOW_GATT 0` (the default) the session, crypto, and 64 KB key table are compiled out — the build is byte‑for‑byte the simple battery‑% firmware.
+
+Full protocol write‑up, findings, and gotchas: [`plans/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/2026-07-15-01-ecoflow-gatt-telemetry.md).
+
 ## Development — BLE connection contention
 
 The Alpicool K25 accepts **one BLE connection at a time** and stops advertising while
@@ -118,10 +146,10 @@ Tracked as dated plan documents under [`plans/`](plans/). Each plan is a self‑
 Done:
 - ✅ MVP (v0.1.0): Alpicool + EcoFlow on the ESP32‑C3 MINI board — see [`plans/done/2026-07-08-01-mvp-esp32c3-oled.md`](plans/done/2026-07-08-01-mvp-esp32c3-oled.md). Remaining from that plan: M6 car install.
 - ✅ Reverse‑engineer notes for both BLE protocols, published under [`docs/protocols/`](docs/protocols/).
+- ✅ **EcoFlow watts, charge state & time‑to‑full** via the authenticated GATT session (opt‑in). See the section above and [`plans/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/2026-07-15-01-ecoflow-gatt-telemetry.md).
 
 Next up:
-- **More EcoFlow stats** — input W, output W, and remaining time. These aren't in the advertisement; they need the authenticated encrypted GATT session (ECDH + protobuf), which no ESP32 implementation exists for yet. See the Tier 2 notes in [`docs/protocols/ecoflow.md`](docs/protocols/ecoflow.md).
-- **On‑device control over BLE** — use the board's two buttons (BOOT + a free GPIO) to turn the fridge and the EcoFlow on/off. The Alpicool write path is already known (see `docs/protocols/alpicool.md`); the EcoFlow side depends on the Tier 2 session above.
+- **On‑device control over BLE** — use the board's two buttons (BOOT + a free GPIO) to turn the fridge and the EcoFlow on/off. The Alpicool write path is already known (see `docs/protocols/alpicool.md`); the EcoFlow write path can now reuse the authenticated GATT session.
 
 Later:
 - Support for the LOLIN S3 Mini + 2.13″ e‑ink shield (battery‑powered v2 — separate plan when the hardware lands).
