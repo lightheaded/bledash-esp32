@@ -75,7 +75,7 @@ pio device monitor
 
 ![bledash showing the EcoFlow charge state](docs/bledash-ecoflow-gatt.jpeg)
 
-*Fridge at 4 °C (set 4°) on the left; EcoFlow at 90 %, current draw, and time remaining on the right — with the vertical bar doubling as a battery gauge and column divider.*
+*Fridge at 6 °C (set 4°) on the left; EcoFlow at 90 %, discharging 21 W with ~15 h to empty on the right — the vertical bar doubles as a battery gauge and column divider.*
 
 By default bledash reads the EcoFlow **battery %** passively from its BLE advertisement — no account, no pairing, no connection. Opt in to the **authenticated GATT session** to also get **input/output watts, charge/discharge state, and time‑to‑full / time‑to‑empty**, read straight from the device (not estimated).
 
