@@ -6,8 +6,10 @@
   `auth OK` then `dsg in=0W out=97W soc=29.8 toEmpty=80min` (discharging into the fridge,
   SoC ticking down as expected). As far as our research found, the first working
   C/C++/ESP32 EcoFlow authenticated BLE session. 25 host tests pass; opt-in strips cleanly.
-  Next: E5 display layout, then E6 coexistence/robustness, then the charging-direction
-  check when solar is connected.
+  **E5 display done** (SoC + direction/watts + time-remaining stack). Two concurrent GATT
+  connections (fridge + EcoFlow) run fine together — much of E6 is satisfied incidentally.
+  Next: eyeball the OLED + see the charging direction once solar is connected; E6 polish
+  (phone-app contention reconnect); then the PR.
 - **Depends on:** shipped MVP (v0.1.0). Extends the existing passive-advert battery
   reading with a full authenticated GATT session.
 - **Motivation:** off-grid use (solar charging at a campsite / beach). The user wants to
@@ -232,10 +234,14 @@ system, not designing new security.
     remaining (EMS u32@21 → `toEmpty=80min`, a sane estimate) all read correctly.
   - **Time-sync:** telemetry flows without us answering the RTC request; `sendTimeSync()`
     is wired but its necessity for charge/discharge data is unconfirmed (harmless).
-- **E5 — Telemetry parse + display.** Extend `EcoflowMonitor`/reading with `chargingWatts`,
-  `dischargingWatts`, `socPreciseTenths`, `minutesToFull`, and a charge state. Redesign the
-  right column (72×40 is tiny): SoC big + a compact charge line, e.g. `↑ 96W  1:20` when
-  charging / `↓ 45W` discharging / `idle`. Validate against HA cloud + the app.
+- **E5 — Telemetry parse + display.** ✅ **Done.** `EcoflowRichReading` carries in/out
+  watts, SoC, charge/discharge remaining minutes, and a derived charge state (E4). The
+  right column now shows, when the GATT session is authenticated, a 3-line stack:
+  SoC `%`, a direction triangle (▲ charging / ▼ discharging / – idle) + watts, and time
+  remaining `H:MM` (to-full when charging, to-empty when discharging); it falls back to the
+  plain big battery-% otherwise. Runs on hardware without crashing; observed the idle
+  state (`94% – --:--`) live. Still to eyeball on the OLED and see the charging direction
+  once solar is connected. Cross-check against HA cloud / app values is still open.
 - **E6 — Robustness & coexistence.** Two concurrent GATT connections + scan on one core;
   reconnect/backoff when the phone app steals the slot; session-stale handling; keep the
   passive-advert SoC as a fallback when no session. Update `docs/protocols/ecoflow.md`
