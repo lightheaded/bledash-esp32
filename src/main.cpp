@@ -19,6 +19,11 @@ static_assert(sizeof(ECOFLOW_USER_ID) > 1,
               "(fetch it with scripts/ecoflow_userid.py)");
 #endif
 
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+#include "telemetry/logger.h"
+#include "telemetry/uploader.h"
+#endif
+
 static const uint32_t kPollIntervalMs = 60000;
 static const uint32_t kScanWindowMs = 2500;
 static const uint32_t kReconnectMs = 5000;
@@ -50,6 +55,11 @@ EcoflowMonitor battery;
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
 EcoflowSession ecoflowSession;
 static uint32_t lastEcoConnAttemptMs = 0;
+#endif
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+static telemetry::Logger telemetryLogger;
+static telemetry::Uploader telemetryUploader;
+static uint32_t lastSampleMs = 0;
 #endif
 
 static uint32_t lastConnAttemptMs = 0;
@@ -189,6 +199,20 @@ static void drawSpinner(int cx, int cy, uint8_t frame) {
   }
 }
 
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+// WiFi glyph, 8x5, drawn at the fridge column's lower-right (mirroring the
+// setpoint at lower-left) whenever the uploader holds a link. Two arcs fanning
+// out above a base dot — arcs narrow toward the dot so it reads as a WiFi fan
+// rather than concentric rainbow bands. XBM bit order (LSB = leftmost pixel):
+//   . # # # # # # .
+//   # . . . . . . #
+//   . . # # # # . .
+//   . # . . . . # .
+//   . . . # # . . .
+static const uint8_t kWifiXbm[] = {0x7E, 0x81, 0x3C, 0x42, 0x18};
+static void drawWifiIcon(int x, int y) { display.drawXBM(x, y, 8, 5, kWifiXbm); }
+#endif
+
 static void renderPage() {
   const FridgeReading& f = fridge.reading();
   const BatteryReading& b = battery.reading();
@@ -277,6 +301,11 @@ static void renderPage() {
     int fillH = (barH - 2) * pct / 100;
     display.drawBox(sx + vbarX + 1, barTop + 1 + (barH - 2 - fillH), vbarW - 2, fillH);
   }
+
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+  // WiFi-connected indicator, lower-right of the fridge column.
+  if (telemetryUploader.wifiConnected()) drawWifiIcon(sx + 22, sy + 33);
+#endif
 
   display.sendBuffer();
 }
@@ -416,7 +445,83 @@ void setup() {
   ecoflowSession.begin(ECOFLOW_SERIAL, ECOFLOW_USER_ID);
   Serial.println("EcoFlow GATT telemetry: ENABLED (advanced)");
 #endif
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+  telemetryLogger.begin();
+  telemetryUploader.begin(telemetryLogger);
+  Serial.println("Telemetry logging + upload: ENABLED");
+#if defined(TELEMETRY_SELFTEST) && TELEMETRY_SELFTEST
+  // Bench diagnostic (off by default): inject one synthetic sample so the
+  // WiFi/TLS upload path can be exercised without BLE devices in range. The
+  // sentinel temp (123) marks it as non-real in the sink.
+  {
+    telemetry::Sample st;
+    st.haveFridgeTemp = true;
+    st.fridgeTempC = 123;
+    st.haveSoc = true;
+    st.socPct = 99.9f;
+    telemetryLogger.log(st);
+    Serial.println("[telemetry] SELFTEST sample injected");
+  }
+#endif
+#endif
 }
+
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+// Assemble one telemetry sample from the freshest readings and append it to the
+// flash ring. Fields absent right now (fridge not yet connected, no EcoFlow
+// session) are simply omitted; an all-empty sample is skipped by the logger.
+static void logTelemetrySample() {
+  telemetry::Sample s;
+
+  const FridgeReading& f = fridge.reading();
+  if (f.valid) {
+    s.haveFridgeTemp = true;
+    s.fridgeTempC = f.actualTemp;
+    s.haveFridgeSetpoint = true;
+    s.fridgeSetpointC = f.targetTemp;
+    s.haveFridgeOn = true;
+    s.fridgeOn = f.poweredOn;
+  }
+
+  bool socFromGatt = false;
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  // The authenticated session yields high-res SoC plus watts and time-to-full/
+  // empty; prefer it over the passive advert %.
+  const EcoflowRichReading& er = ecoflowSession.reading();
+  if (ecoflowSession.authenticated()) {
+    if (er.haveSoc) {
+      s.haveSoc = true;
+      s.socPct = er.soc;
+      socFromGatt = true;
+    }
+    if (er.haveInputWatts) {
+      s.haveInWatts = true;
+      s.inWatts = er.inputWatts;
+    }
+    if (er.haveOutputWatts) {
+      s.haveOutWatts = true;
+      s.outWatts = er.outputWatts;
+    }
+    if (er.state == EcoflowRichReading::Charge::kCharging &&
+        er.haveChargeRemainMin) {
+      s.haveRemainMin = true;
+      s.remainMin = er.chargeRemainMin;
+    } else if (er.state == EcoflowRichReading::Charge::kDischarging &&
+               er.haveDischargeRemainMin) {
+      s.haveRemainMin = true;
+      s.remainMin = er.dischargeRemainMin;
+    }
+  }
+#endif
+  const BatteryReading& b = battery.reading();
+  if (!socFromGatt && b.valid) {
+    s.haveSoc = true;
+    s.socPct = (float)b.percent;
+  }
+
+  telemetryLogger.log(s);
+}
+#endif
 
 void loop() {
   // One scan window feeds both devices (sliced so a BOOT press is seen quickly).
@@ -476,6 +581,17 @@ void loop() {
   if (buttonPressed) confirmPowerToggle();
 
   renderPage();
+
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+  // One sample per poll cycle, matching the fridge's 60 s cadence. `now` was
+  // taken earlier this loop; close enough for a per-minute log.
+  if (lastSampleMs == 0 || now - lastSampleMs >= kPollIntervalMs) {
+    lastSampleMs = now;
+    logTelemetrySample();
+  }
+  // WiFi upkeep, SNTP, and backlog drain (self-throttled; cheap when idle).
+  telemetryUploader.poll();
+#endif
 
   // Log a status line only when something changes, so the serial console stays
   // useful on this otherwise headless device without spamming every loop.

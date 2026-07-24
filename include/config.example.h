@@ -30,3 +30,36 @@
 // sends MD5(ECOFLOW_USER_ID + ECOFLOW_SERIAL). Fetch it once from the EcoFlow cloud
 // login endpoint (see scripts/ecoflow_userid.py) — never commit it.
 #define ECOFLOW_USER_ID ""
+
+// --- Telemetry logging + upload (opt-in; see
+//     plans/2026-07-24-01-telemetry-logging-upload.md) ---
+// 0 = default: no flash logging, no WiFi. The logger, WiFi/TLS stack, and CA
+//     bundle are compiled out entirely, exactly like ECOFLOW_GATT=0.
+// 1 = log one sample per poll cycle to a LittleFS ring (works offline; this is
+//     the backbone), and — once the uploader lands (T3) — drain the backlog to
+//     TELEMETRY_URL over WiFi whenever a network is in range.
+#define TELEMETRY_UPLOAD 0
+// Tag attached to every sample so multiple devices land in distinct series
+// (line protocol: bledash,device=<tag> ...). Used from T1 (logging) onward.
+#define TELEMETRY_DEVICE_TAG "car"
+// Hostname the device presents to DHCP (how it shows up in your router /
+// hotspot client list).
+#define WIFI_HOSTNAME "bledash-esp32"
+// WiFi networks to seek, highest priority FIRST. Add as many X(ssid, password)
+// lines as you like — the device scans and joins the highest-priority network
+// in range (so a home AP is preferred over a metered phone hotspot when both
+// are present). Real SSIDs/passwords are private; keep them only in gitignored
+// config.h, never in a tracked/public file.
+#define WIFI_AP_LIST \
+  X("HomeWiFi", "home-password") \
+  X("PhoneHotspot", "hotspot-password")
+// Line-protocol ingest endpoint, e.g. "https://host/write". Bring your own sink
+// (InfluxDB, VictoriaMetrics/vmagent, Telegraf — anything that accepts InfluxDB
+// line protocol). Credentials are HTTP basic auth.
+#define TELEMETRY_URL ""
+#define TELEMETRY_USER ""
+#define TELEMETRY_PASS ""
+// TLS is verified against the embedded ISRG Root X1 (Let's Encrypt) by default.
+// For a sink with a different issuer, define TELEMETRY_CA_PEM as the CA PEM
+// string here; leave it undefined for Let's Encrypt endpoints.
+// #define TELEMETRY_CA_PEM "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"

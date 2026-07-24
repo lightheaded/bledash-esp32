@@ -4,7 +4,7 @@ Tiny ESP32 firmware that connects to your Bluetooth Low Energy (BLE) devices, po
 
 Built for a very specific use case (see [MVP scope](#mvp-scope)) but designed so you can add support for more BLE devices, more screens, and more targets over time.
 
-**Status:** [v0.3.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.3.0) — adds **on‑device fridge power control**: press‑and‑hold the BOOT button to toggle the Alpicool on/off, with an on‑screen hold‑to‑confirm countdown (see below). On top of [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0)'s **opt‑in EcoFlow watts, charge state & time‑to‑full** and the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+**Status:** [v0.4.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.4.0) — adds **opt‑in telemetry logging & upload**: log fridge + EcoFlow readings to flash and drain them over WiFi to any InfluxDB‑line‑protocol sink (Prometheus, InfluxDB, …) for off‑device graphing, with an example Grafana dashboard (see below). On top of [v0.3.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.3.0)'s **on‑device fridge power control**, [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0)'s **opt‑in EcoFlow watts, charge state & time‑to‑full**, and the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
 
 ![bledash on the ESP32-C3 in the car: fridge at 6°C and EcoFlow at 90% discharging 21W](docs/bledash-ecoflow-gatt.jpeg)
 
@@ -30,7 +30,7 @@ This firmware is a BLE Central that polls one or more BLE Peripherals on a sched
 - **Power:** 5 V via USB‑C from the car's USB port (always‑on while the car is on).
 - **Devices:**
   - Alpicool K‑series 12/24V compressor fridge — target temp, actual temp, on/off (via a held BLE connection).
-  - EcoFlow River 2 Max portable power station — battery % (parsed passively from BLE advertisements; watts require an authenticated encrypted session and are deferred).
+  - EcoFlow River 2 Max portable power station — battery % (parsed passively from BLE advertisements; watts require an authenticated encrypted session, later shipped as an opt‑in — see below).
 - **UI:** single page on the 72×40 display showing both devices (fridge temp + battery %); rotating pages only as fallback.
 - **Cycle:** refresh each device once per minute.
 
@@ -107,6 +107,35 @@ Full protocol write‑up, findings, and gotchas: [`plans/done/2026-07-15-01-ecof
 
 Only the **BOOT button (GPIO9)** drives this. The board's other button is **RST** — the chip reset line, not a readable input — so it can't be repurposed. The toggle rebuilds the fridge's full settings struct from the last status read and flips **only** the power byte, so your setpoint, run mode, and battery‑protection settings are preserved rather than overwritten. Protocol details (the `SET` command layout) are in [`docs/protocols/alpicool.md`](docs/protocols/alpicool.md).
 
+## Telemetry logging & upload (advanced, opt‑in)
+
+The OLED answers *"what's it doing right now"*. For questions that need **history** — how fast the fridge pulls down from ambient, how much cold it holds unpowered, how long the battery lasts under a given load, what solar recovery looks like — bledash can log every reading to flash and, when WiFi is in range, ship the backlog to a time‑series database you point it at.
+
+- **Local‑first.** One sample per minute is written to a LittleFS ring (~2 weeks) whether or not any network is present — the interesting curves happen while the car is parked and offline, so logging never depends on a link being up.
+- **Opportunistic upload.** Whenever a configured WiFi network appears (a phone hotspot in the car, a home AP), the backlog drains over HTTPS with basic auth in **InfluxDB line protocol**, carrying each sample's original timestamp. The upload cursor advances only on a `2xx`, so a dropped connection re‑sends rather than loses.
+- **Bring your own sink.** Anything that speaks InfluxDB line protocol works — InfluxDB, VictoriaMetrics / `vmagent` → Prometheus, Telegraf. Nothing about the backend is baked into the firmware; endpoint, credentials, and device tag all live in `config.h`.
+- **Off by default, zero cost.** With `TELEMETRY_UPLOAD 0` (the default) the logger, the WiFi/TLS stack, and the embedded CA compile out entirely — the build is byte‑for‑byte the no‑WiFi firmware.
+
+Enable it in `include/config.h` (a small WiFi glyph lights at the fridge column's lower‑right while the link is up):
+
+```c
+#define TELEMETRY_UPLOAD    1
+#define TELEMETRY_DEVICE_TAG "car"     // tags each sample so multiple units stay distinct
+#define WIFI_SSID           "..."
+#define WIFI_PASS           "..."
+#define TELEMETRY_URL       "https://your-host/write"   // line-protocol endpoint
+#define TELEMETRY_USER      "..."
+#define TELEMETRY_PASS      "..."
+```
+
+Multiple networks are supported — list them in `WIFI_AP_LIST` highest‑priority first (e.g. home WiFi before the car hotspot) and the device joins the best one in range. TLS is verified against an embedded ISRG Root X1 (Let's Encrypt) by default; set `TELEMETRY_CA_PEM` for a sink with a different issuer. Enabling this pulls in the WiFi/TLS stack, so the build uses a single‑app (`no_ota`) partition automatically. Design, storage format, and coexistence notes: [`plans/2026-07-24-01-telemetry-logging-upload.md`](plans/2026-07-24-01-telemetry-logging-upload.md).
+
+An example Grafana dashboard for the `bledash_*` series ships in [`docs/grafana-dashboard-bledash.json`](docs/grafana-dashboard-bledash.json) — import it and pick your Prometheus datasource:
+
+![bledash Grafana dashboard: fridge duty cycle, EcoFlow discharge curve, power in/out, and time‑to‑empty](docs/bledash-grafana-dashboard.png)
+
+*Everything the analysis is for: the fridge duty‑cycling around its 4 °C setpoint (top‑left), the EcoFlow discharge curve (top‑right), load in/out, and live time‑to‑empty — all from the uploaded metrics, graphed off‑device.*
+
 ## Development — BLE connection contention
 
 The Alpicool K25 accepts **one BLE connection at a time** and stops advertising while
@@ -142,10 +171,11 @@ over SSH.
 
 - **Alpicool app** — force-kill it (swipe it away; don't just background it). This is the
   one that most often steals the fridge mid-session.
-- **EcoFlow app** — the MVP only *passively scans* EcoFlow advertisements (it never
-  connects), so a running EcoFlow app usually doesn't conflict. Only force-kill it if the
-  River 2 Max stops appearing in scans or its advertised battery byte goes stale — some
-  firmware quiets the manufacturer-data advert while a central is connected.
+- **EcoFlow app** — with the default (passive advertisement scan) a running EcoFlow app
+  doesn't conflict. But with `ECOFLOW_GATT` enabled bledash holds an authenticated
+  connection to the River 2 Max, which is single-central like the fridge — so the app and
+  bledash then contend for it. Force-kill the app if the session won't authenticate or the
+  unit stops advertising (some firmware quiets the manufacturer-data advert while connected).
 
 ## Roadmap
 
@@ -156,15 +186,16 @@ Done:
 - ✅ Reverse‑engineer notes for both BLE protocols, published under [`docs/protocols/`](docs/protocols/).
 - ✅ **EcoFlow watts, charge state & time‑to‑full** via the authenticated GATT session (opt‑in). See the section above and [`plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md).
 - ✅ **On‑device fridge power control** (v0.3.0): press‑and‑hold the BOOT button to toggle the Alpicool on/off, with a hold‑to‑confirm countdown and a pending spinner. See the section above.
+- ✅ **Telemetry logging + opportunistic upload** (v0.4.0, opt‑in): local flash ring + WiFi/HTTPS drain to any InfluxDB‑line‑protocol sink, for off‑device history and graphing. See the section above and [`plans/2026-07-24-01-telemetry-logging-upload.md`](plans/2026-07-24-01-telemetry-logging-upload.md).
 
 Next up:
 - **On‑device EcoFlow control** — toggle the EcoFlow's AC/DC outputs over the authenticated GATT session (the write path can reuse the session bledash already establishes). Note the board's only usable button is **BOOT/GPIO9** — the other is RST — so multi‑target control needs a soldered button or a press‑gesture scheme.
 
 Later:
 - Support for the LOLIN S3 Mini + 2.13″ e‑ink shield (battery‑powered v2 — separate plan when the hardware lands).
-- MQTT bridge (optional WiFi mode for home use).
 - Web config page over SoftAP for setting device MACs without a rebuild.
 - Add more supported devices — smart plugs, ATC/pvvx thermometers, BLE scales.
+- OTA firmware updates over the WiFi link the telemetry feature already brings up.
 
 ## Related work / prior art
 
@@ -173,7 +204,7 @@ This project stands entirely on other people's reverse‑engineering. The Alpico
 - **Alpicool BLE** — [Gruni22/alpicool_ha_ble](https://github.com/Gruni22/alpicool_ha_ble), the Home Assistant integration whose `FE FE` framing and status byte layout this project's driver is built from. Details in [`docs/protocols/alpicool.md`](docs/protocols/alpicool.md).
 - **EcoFlow BLE** —
   - [npike/ha-ecoflow-ble](https://github.com/npike/ha-ecoflow-ble) — passive advertisement parsing (manufacturer ID, serial, battery byte); the basis for this project's Tier 1 battery reading.
-  - [rabits/ha-ef-ble](https://github.com/rabits/ha-ef-ble) and [rabits/ef-ble-reverse](https://github.com/rabits/ef-ble-reverse) — the authenticated GATT protocol (River 2 Max supported), for the deferred Tier 2 watts/remaining‑time work.
+  - [rabits/ha-ef-ble](https://github.com/rabits/ha-ef-ble) and [rabits/ef-ble-reverse](https://github.com/rabits/ef-ble-reverse) — the authenticated GATT protocol (River 2 Max supported); the basis for this project's Tier 2 watts / remaining‑time implementation.
   - [avaver/ecoflow-ble](https://github.com/avaver/ecoflow-ble) and [nielsole/ecoflow-bt-reverse-engineering](https://github.com/nielsole/ecoflow-bt-reverse-engineering) — earlier Delta‑2‑era protocol notes.
 - **EcoFlow local API** — [`ecoflow-mqtt`](https://github.com/tolwi/hassio-ecoflow-cloud) and `hassio-ecoflow` documented the LAN/cloud protocol (not used here, but useful cross‑reference).
 - **ATC / pvvx firmware** for Xiaomi thermometers — inspiration for the "small device, big number, glanceable" UI philosophy.

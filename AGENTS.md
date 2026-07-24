@@ -9,8 +9,11 @@ Device serials, BLE MACs, internal IP addresses, tokens, and credentials must **
 appear in tracked files (source, plans, README, commit messages). They live only in
 gitignored locations:
 
-- `local/` — notes and secrets (e.g. `local/devices.md`, `local/ha.env`)
-- `include/config.h` — build-time device identifiers
+- `local/` — notes and secrets (e.g. `local/devices.md`, `local/ha.env`, `local/telemetry-ingest.md`)
+- `include/config.h` — build-time device identifiers **and** the telemetry secrets when
+  `TELEMETRY_UPLOAD=1`: WiFi SSID/password and the ingest endpoint URL + basic-auth
+  credentials. All private; `config.h` is gitignored. Never put the ingest hostname or WiFi
+  details in tracked files (README, plans, source) — describe them generically.
 
 In tracked files, refer to *where* a value lives, not the value itself. When pulling data
 from Home Assistant (see below), scrub identifiers before writing anything to a tracked
@@ -38,9 +41,10 @@ attempts fail confusingly:
 2. **Remind the user to force-quit the vendor phone apps** (an agent can't do this):
    - **Alpicool app** — force-kill it (swipe away, not just background). Most common thief of
      the connection mid-session.
-   - **EcoFlow app** — usually harmless because the MVP only passively scans EcoFlow adverts
-     (never connects). Only flag it if the River 2 Max stops showing up in scans or its
-     battery byte goes stale.
+   - **EcoFlow app** — harmless with the default (passive advert scan only). But with
+     `ECOFLOW_GATT=1` bledash holds an authenticated connection to the River 2 Max, which is
+     single-central just like the fridge: the EcoFlow app and bledash then contend for it.
+     Force-kill the app if the GATT session won't authenticate or the unit stops advertising.
 
 The helper talks to HA over its WebSocket API and needs `local/ha.env` (`HA_HOST`,
 `HA_TOKEN`). It runs from the dev machine, not over SSH: disabling a config entry is a
@@ -61,9 +65,16 @@ serials are in `local/devices.md`.
 
 ## Source of truth
 
-The MVP plan (shipped as v0.1.0) is `plans/done/2026-07-08-01-mvp-esp32c3-oled.md`. Read it
-for architecture and protocol context. Next-up work (more EcoFlow stats, on-device BLE
-control) is tracked in the README roadmap until its own plan is written.
+Plan documents under `plans/` are the source of truth; shipped ones move to `plans/done/`:
+- `plans/done/2026-07-08-01-mvp-esp32c3-oled.md` — MVP (v0.1.0): architecture + both BLE protocols.
+- `plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md` — authenticated EcoFlow GATT session
+  (watts, charge state, time-to-full/empty), opt-in via `ECOFLOW_GATT`.
+- `plans/2026-07-24-01-telemetry-logging-upload.md` — flash logging + WiFi/HTTPS upload,
+  opt-in via `TELEMETRY_UPLOAD`. The Grafana dashboard for the uploaded series lives in the
+  private homelab (casa) repo, not here.
+
+On-device fridge power control (v0.3.0) shipped from the README roadmap. Remaining next-up
+work is tracked in the README roadmap until its own plan is written.
 
 ## Every release ships with a visual
 
