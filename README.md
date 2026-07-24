@@ -97,7 +97,7 @@ Caveats worth knowing:
 - **One BLE central.** While bledash holds the session the EcoFlow **phone app can't connect**, and vice‑versa.
 - **Off by default, zero cost.** With `ECOFLOW_GATT 0` (the default) the session, crypto, and 64 KB key table are compiled out — the build is byte‑for‑byte the simple battery‑% firmware.
 
-Full protocol write‑up, findings, and gotchas: [`plans/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/2026-07-15-01-ecoflow-gatt-telemetry.md).
+Full protocol write‑up, findings, and gotchas: [`plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md).
 
 ## Fridge power control from the board
 
@@ -154,7 +154,7 @@ Tracked as dated plan documents under [`plans/`](plans/). Each plan is a self‑
 Done:
 - ✅ MVP (v0.1.0): Alpicool + EcoFlow on the ESP32‑C3 MINI board — see [`plans/done/2026-07-08-01-mvp-esp32c3-oled.md`](plans/done/2026-07-08-01-mvp-esp32c3-oled.md). Remaining from that plan: M6 car install.
 - ✅ Reverse‑engineer notes for both BLE protocols, published under [`docs/protocols/`](docs/protocols/).
-- ✅ **EcoFlow watts, charge state & time‑to‑full** via the authenticated GATT session (opt‑in). See the section above and [`plans/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/2026-07-15-01-ecoflow-gatt-telemetry.md).
+- ✅ **EcoFlow watts, charge state & time‑to‑full** via the authenticated GATT session (opt‑in). See the section above and [`plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md).
 - ✅ **On‑device fridge power control** (v0.3.0): press‑and‑hold the BOOT button to toggle the Alpicool on/off, with a hold‑to‑confirm countdown and a pending spinner. See the section above.
 
 Next up:
