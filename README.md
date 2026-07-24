@@ -4,7 +4,7 @@ Tiny ESP32 firmware that connects to your Bluetooth Low Energy (BLE) devices, po
 
 Built for a very specific use case (see [MVP scope](#mvp-scope)) but designed so you can add support for more BLE devices, more screens, and more targets over time.
 
-**Status:** [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0) — adds **opt‑in EcoFlow watts, charge state & time‑to‑full** over the authenticated BLE session (see below), on top of the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+**Status:** [v0.3.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.3.0) — adds **on‑device fridge power control**: press‑and‑hold the BOOT button to toggle the Alpicool on/off, with an on‑screen hold‑to‑confirm countdown (see below). On top of [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0)'s **opt‑in EcoFlow watts, charge state & time‑to‑full** and the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
 
 ![bledash on the ESP32-C3 in the car: fridge at 6°C and EcoFlow at 90% discharging 21W](docs/bledash-ecoflow-gatt.jpeg)
 
@@ -99,6 +99,14 @@ Caveats worth knowing:
 
 Full protocol write‑up, findings, and gotchas: [`plans/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/2026-07-15-01-ecoflow-gatt-telemetry.md).
 
+## Fridge power control from the board
+
+![Holding the BOOT button toggles the Alpicool fridge off with a hold-to-confirm countdown, then a second hold turns it back on](docs/bledash-power-toggle.gif)
+
+*Press‑and‑hold the **BOOT button** (~1 s) to toggle the fridge on/off. A full‑screen countdown confirms the hold — release early to cancel — then bledash sends the change over the connection it already holds and shows a spinner until the fridge confirms the new state. While off, the screen shows a compact **hold=ON** hint.*
+
+Only the **BOOT button (GPIO9)** drives this. The board's other button is **RST** — the chip reset line, not a readable input — so it can't be repurposed. The toggle rebuilds the fridge's full settings struct from the last status read and flips **only** the power byte, so your setpoint, run mode, and battery‑protection settings are preserved rather than overwritten. Protocol details (the `SET` command layout) are in [`docs/protocols/alpicool.md`](docs/protocols/alpicool.md).
+
 ## Development — BLE connection contention
 
 The Alpicool K25 accepts **one BLE connection at a time** and stops advertising while
@@ -147,9 +155,10 @@ Done:
 - ✅ MVP (v0.1.0): Alpicool + EcoFlow on the ESP32‑C3 MINI board — see [`plans/done/2026-07-08-01-mvp-esp32c3-oled.md`](plans/done/2026-07-08-01-mvp-esp32c3-oled.md). Remaining from that plan: M6 car install.
 - ✅ Reverse‑engineer notes for both BLE protocols, published under [`docs/protocols/`](docs/protocols/).
 - ✅ **EcoFlow watts, charge state & time‑to‑full** via the authenticated GATT session (opt‑in). See the section above and [`plans/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/2026-07-15-01-ecoflow-gatt-telemetry.md).
+- ✅ **On‑device fridge power control** (v0.3.0): press‑and‑hold the BOOT button to toggle the Alpicool on/off, with a hold‑to‑confirm countdown and a pending spinner. See the section above.
 
 Next up:
-- **On‑device control over BLE** — use the board's two buttons (BOOT + a free GPIO) to turn the fridge and the EcoFlow on/off. The Alpicool write path is already known (see `docs/protocols/alpicool.md`); the EcoFlow write path can now reuse the authenticated GATT session.
+- **On‑device EcoFlow control** — toggle the EcoFlow's AC/DC outputs over the authenticated GATT session (the write path can reuse the session bledash already establishes). Note the board's only usable button is **BOOT/GPIO9** — the other is RST — so multi‑target control needs a soldered button or a press‑gesture scheme.
 
 Later:
 - Support for the LOLIN S3 Mini + 2.13″ e‑ink shield (battery‑powered v2 — separate plan when the hardware lands).

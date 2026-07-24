@@ -64,3 +64,13 @@ serials are in `local/devices.md`.
 The MVP plan (shipped as v0.1.0) is `plans/done/2026-07-08-01-mvp-esp32c3-oled.md`. Read it
 for architecture and protocol context. Next-up work (more EcoFlow stats, on-device BLE
 control) is tracked in the README roadmap until its own plan is written.
+
+## Every release ships with a visual
+
+This is hardware firmware — a release should *show the thing working*, not just describe it.
+Every tagged release MUST include at least one visual of the new capability on real hardware
+(a photo for a static feature, an animated GIF for anything with motion/interaction), embedded
+in the README and attached to / shown in the GitHub release notes. Keep GIFs small (crush with
+`gifsicle`; the v0.3.0 button-toggle demo landed ~2–3 MB). If the human preparing a release
+hasn't provided a visual, **remind them and ask for one before cutting the tag** — don't ship a
+release without it.
