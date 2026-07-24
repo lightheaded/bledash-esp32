@@ -200,14 +200,17 @@ static void drawSpinner(int cx, int cy, uint8_t frame) {
 }
 
 #if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
-// Small WiFi glyph — a base dot with two arcs opening upward — shown at the
-// fridge column's lower-right (mirroring the setpoint at lower-left) whenever
-// the uploader holds a WiFi link. baseY is the dot; the arcs rise above it.
-static void drawWifiIcon(int cx, int baseY) {
-  display.drawPixel(cx, baseY);
-  display.drawCircle(cx, baseY, 2, U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT);
-  display.drawCircle(cx, baseY, 4, U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT);
-}
+// WiFi glyph, 8x5, drawn at the fridge column's lower-right (mirroring the
+// setpoint at lower-left) whenever the uploader holds a link. Two arcs fanning
+// out above a base dot — arcs narrow toward the dot so it reads as a WiFi fan
+// rather than concentric rainbow bands. XBM bit order (LSB = leftmost pixel):
+//   . # # # # # # .
+//   # . . . . . . #
+//   . . # # # # . .
+//   . # . . . . # .
+//   . . . # # . . .
+static const uint8_t kWifiXbm[] = {0x7E, 0x81, 0x3C, 0x42, 0x18};
+static void drawWifiIcon(int x, int y) { display.drawXBM(x, y, 8, 5, kWifiXbm); }
 #endif
 
 static void renderPage() {
@@ -301,7 +304,7 @@ static void renderPage() {
 
 #if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
   // WiFi-connected indicator, lower-right of the fridge column.
-  if (telemetryUploader.wifiConnected()) drawWifiIcon(sx + 27, sy + 37);
+  if (telemetryUploader.wifiConnected()) drawWifiIcon(sx + 22, sy + 33);
 #endif
 
   display.sendBuffer();

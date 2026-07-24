@@ -40,31 +40,68 @@ const char* caPem() {
 #endif
 }
 
+// Configured networks, expanded from WIFI_AP_LIST. Array order = priority.
+struct WifiAp {
+  const char* ssid;
+  const char* pass;
+};
+const WifiAp kAps[] = {
+#define X(ssid, pass) {ssid, pass},
+    WIFI_AP_LIST
+#undef X
+};
+constexpr size_t kApCount = sizeof(kAps) / sizeof(kAps[0]);
+
 }  // namespace
+
+#ifndef WIFI_HOSTNAME
+#define WIFI_HOSTNAME "bledash-esp32"
+#endif
 
 void Uploader::begin(Logger& logger) {
   logger_ = &logger;
-  WiFi.mode(WIFI_STA);
   WiFi.persistent(false);        // don't wear flash writing creds every connect
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(WIFI_HOSTNAME);  // identity in router / hotspot client lists
   WiFi.setAutoReconnect(true);   // let the stack recover drops on its own
   WiFi.setSleep(true);           // modem sleep — BLE and WiFi share the one radio
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.printf("[upload] WiFi joining \"%s\"\n", WIFI_SSID);
+  tryConnect();
 }
 
 bool Uploader::wifiConnected() const { return WiFi.status() == WL_CONNECTED; }
+
+void Uploader::tryConnect() {
+  // Scan, then join the highest-priority configured network that's in range.
+  // A ~2 s scan while BLE runs is acceptable at the 15 s disconnected cadence;
+  // once connected we never scan again.
+  int n = WiFi.scanNetworks();
+  int best = -1;  // index into kAps; lower = higher priority
+  for (int i = 0; i < n; i++) {
+    String found = WiFi.SSID(i);
+    for (size_t a = 0; a < kApCount; a++) {
+      if (found == kAps[a].ssid && (best < 0 || (int)a < best)) best = (int)a;
+    }
+  }
+  WiFi.scanDelete();
+  if (best < 0) {
+    Serial.println("[upload] no configured WiFi in range");
+    return;
+  }
+  Serial.printf("[upload] joining \"%s\" (priority %d of %u)\n", kAps[best].ssid,
+                best, (unsigned)kApCount);
+  WiFi.begin(kAps[best].ssid, kAps[best].pass);
+}
 
 void Uploader::poll() {
   if (!logger_) return;
   uint32_t now = millis();
 
   if (WiFi.status() != WL_CONNECTED) {
-    // setAutoReconnect handles most drops; re-issue begin() periodically as a
-    // fallback for states it doesn't recover from. No disconnect() first — that
-    // would abort an in-flight reassociation and slow recovery on a spotty link.
+    // setAutoReconnect handles most drops; rescan+rejoin periodically as a
+    // fallback (and to pick up a higher-priority network that came into range).
     if (lastWifiTryMs_ == 0 || now - lastWifiTryMs_ >= kWifiRetryMs) {
       lastWifiTryMs_ = now;
-      WiFi.begin(WIFI_SSID, WIFI_PASS);
+      tryConnect();
     }
     return;
   }

@@ -41,6 +41,10 @@ class Uploader {
   bool clockSynced() const { return bootEpochValid_; }
 
  private:
+  // Scan and join the highest-priority configured network currently in range
+  // (WIFI_AP_LIST order = priority). No-op if none are visible.
+  void tryConnect();
+
   // Push as much of the backlog as the endpoint accepts, one chunked POST at a
   // time, advancing the cursor on each 2xx. Returns the number of records sent.
   size_t drain();

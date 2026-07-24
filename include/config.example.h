@@ -42,12 +42,17 @@
 // Tag attached to every sample so multiple devices land in distinct series
 // (line protocol: bledash,device=<tag> ...). Used from T1 (logging) onward.
 #define TELEMETRY_DEVICE_TAG "car"
-// --- The following are consumed by the uploader (T3); leave blank until then.
-// WiFi network to join opportunistically for uploads (phone hotspot in the car,
-// or a home AP). NOT a private smart-home detail to hard-code in a public fork —
-// keep real values only here in gitignored config.h.
-#define WIFI_SSID ""
-#define WIFI_PASS ""
+// Hostname the device presents to DHCP (how it shows up in your router /
+// hotspot client list).
+#define WIFI_HOSTNAME "bledash-esp32"
+// WiFi networks to seek, highest priority FIRST. Add as many X(ssid, password)
+// lines as you like — the device scans and joins the highest-priority network
+// in range (so a home AP is preferred over a metered phone hotspot when both
+// are present). Real SSIDs/passwords are private; keep them only in gitignored
+// config.h, never in a tracked/public file.
+#define WIFI_AP_LIST \
+  X("HomeWiFi", "home-password") \
+  X("PhoneHotspot", "hotspot-password")
 // Line-protocol ingest endpoint, e.g. "https://host/write". Bring your own sink
 // (InfluxDB, VictoriaMetrics/vmagent, Telegraf — anything that accepts InfluxDB
 // line protocol). Credentials are HTTP basic auth.
