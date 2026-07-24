@@ -4,7 +4,7 @@ Tiny ESP32 firmware that connects to your Bluetooth Low Energy (BLE) devices, po
 
 Built for a very specific use case (see [MVP scope](#mvp-scope)) but designed so you can add support for more BLE devices, more screens, and more targets over time.
 
-**Status:** [v0.3.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.3.0) — adds **on‑device fridge power control**: press‑and‑hold the BOOT button to toggle the Alpicool on/off, with an on‑screen hold‑to‑confirm countdown (see below). On top of [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0)'s **opt‑in EcoFlow watts, charge state & time‑to‑full** and the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
+**Status:** [v0.4.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.4.0) — adds **opt‑in telemetry logging & upload**: log fridge + EcoFlow readings to flash and drain them over WiFi to any InfluxDB‑line‑protocol sink (Prometheus, InfluxDB, …) for off‑device graphing, with an example Grafana dashboard (see below). On top of [v0.3.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.3.0)'s **on‑device fridge power control**, [v0.2.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.2.0)'s **opt‑in EcoFlow watts, charge state & time‑to‑full**, and the [v0.1.0](https://github.com/lightheaded/bledash-esp32/releases/tag/v0.1.0) MVP. Supported devices: **Alpicool** car fridges and **EcoFlow River 2 series** power stations. Supported hardware: **ESP32‑C3 "MINI" dev board with 0.42″ OLED**.
 
 ![bledash on the ESP32-C3 in the car: fridge at 6°C and EcoFlow at 90% discharging 21W](docs/bledash-ecoflow-gatt.jpeg)
 
@@ -186,7 +186,7 @@ Done:
 - ✅ Reverse‑engineer notes for both BLE protocols, published under [`docs/protocols/`](docs/protocols/).
 - ✅ **EcoFlow watts, charge state & time‑to‑full** via the authenticated GATT session (opt‑in). See the section above and [`plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md`](plans/done/2026-07-15-01-ecoflow-gatt-telemetry.md).
 - ✅ **On‑device fridge power control** (v0.3.0): press‑and‑hold the BOOT button to toggle the Alpicool on/off, with a hold‑to‑confirm countdown and a pending spinner. See the section above.
-- ✅ **Telemetry logging + opportunistic upload** (opt‑in): local flash ring + WiFi/HTTPS drain to any InfluxDB‑line‑protocol sink, for off‑device history and graphing. See the section above and [`plans/2026-07-24-01-telemetry-logging-upload.md`](plans/2026-07-24-01-telemetry-logging-upload.md).
+- ✅ **Telemetry logging + opportunistic upload** (v0.4.0, opt‑in): local flash ring + WiFi/HTTPS drain to any InfluxDB‑line‑protocol sink, for off‑device history and graphing. See the section above and [`plans/2026-07-24-01-telemetry-logging-upload.md`](plans/2026-07-24-01-telemetry-logging-upload.md).
 
 Next up:
 - **On‑device EcoFlow control** — toggle the EcoFlow's AC/DC outputs over the authenticated GATT session (the write path can reuse the session bledash already establishes). Note the board's only usable button is **BOOT/GPIO9** — the other is RST — so multi‑target control needs a soldered button or a press‑gesture scheme.

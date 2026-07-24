@@ -1,12 +1,13 @@
 # Telemetry logging + upload — performance graphs for fridge & battery
 
 - **Date:** 2026-07-24
-- **Status:** 🚧 in progress — server side live; **T1–T3 implemented and verified
-  on hardware** on branch `telemetry-logging`, behind `TELEMETRY_UPLOAD` (off by
-  default). A synthetic sample was logged, uploaded over WiFi/HTTPS, and
-  confirmed landed in Prometheus (`bledash_fridge_temp_c{device="car"}=123`) with
-  a correct resolved timestamp. **T4** (a real drive + overnight parked cycle,
-  once the devices are in range) and **T5** (docs + PR) remain.
+- **Status:** ✅ shipped as **v0.4.0** — opt-in behind `TELEMETRY_UPLOAD` (off by
+  default). Verified end-to-end on hardware against a live endpoint: both fridge
+  and EcoFlow (GATT) metrics log to flash and drain over WiFi/HTTPS into
+  Prometheus at correct timestamps; a real fridge duty cycle + EcoFlow discharge
+  curve rendered in Grafana (see `docs/bledash-grafana-dashboard.png`). Multi-AP
+  (priority order), spotty-link retry, and a WiFi status glyph included. Only the
+  long overnight retention leg of T4 is left to observe passively over time.
 - **Depends on:** v0.2.0 (fridge driver + EcoFlow GATT telemetry). Touches
   `main.cpp` and adds a new `src/telemetry/` layer; no changes to the BLE
   drivers themselves.
@@ -191,9 +192,11 @@ retired. **Flash was the real cost:** GATT + WiFi/TLS overflowed the default
   cursor-on-2xx retry re-sends it next tick, no loss. Still wanted: the overnight
   parked/retention leg. A WiFi-connected indicator was added to the display
   (lower-right of the fridge column).
-- **T5 — Docs + release.** README roadmap update ("MQTT bridge" item replaced
-  by this), config.example.h documented, PR. Public docs describe the feature
-  as "bring your own line-protocol endpoint".
+- **T5 — Docs + release. ✅ done** (v0.4.0). README telemetry section +
+  roadmap update ("MQTT bridge" item replaced by this), config.example.h
+  documented (`WIFI_AP_LIST`, hostname, endpoint/CA), and an importable example
+  Grafana dashboard (`docs/grafana-dashboard-bledash.json`) with a screenshot.
+  Public docs describe the feature as "bring your own line-protocol endpoint".
 
 ## Non-goals
 
