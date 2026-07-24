@@ -128,7 +128,13 @@ Enable it in `include/config.h` (a small WiFi glyph lights at the fridge column'
 #define TELEMETRY_PASS      "..."
 ```
 
-TLS is verified against an embedded ISRG Root X1 (Let's Encrypt) by default; set `TELEMETRY_CA_PEM` for a sink with a different issuer. Enabling this pulls in the WiFi/TLS stack, so the build uses a single‑app (`no_ota`) partition automatically. Design, storage format, and coexistence notes: [`plans/2026-07-24-01-telemetry-logging-upload.md`](plans/2026-07-24-01-telemetry-logging-upload.md).
+Multiple networks are supported — list them in `WIFI_AP_LIST` highest‑priority first (e.g. home WiFi before the car hotspot) and the device joins the best one in range. TLS is verified against an embedded ISRG Root X1 (Let's Encrypt) by default; set `TELEMETRY_CA_PEM` for a sink with a different issuer. Enabling this pulls in the WiFi/TLS stack, so the build uses a single‑app (`no_ota`) partition automatically. Design, storage format, and coexistence notes: [`plans/2026-07-24-01-telemetry-logging-upload.md`](plans/2026-07-24-01-telemetry-logging-upload.md).
+
+An example Grafana dashboard for the `bledash_*` series ships in [`docs/grafana-dashboard-bledash.json`](docs/grafana-dashboard-bledash.json) — import it and pick your Prometheus datasource:
+
+![bledash Grafana dashboard: fridge duty cycle, EcoFlow discharge curve, power in/out, and time‑to‑empty](docs/bledash-grafana-dashboard.png)
+
+*Everything the analysis is for: the fridge duty‑cycling around its 4 °C setpoint (top‑left), the EcoFlow discharge curve (top‑right), load in/out, and live time‑to‑empty — all from the uploaded metrics, graphed off‑device.*
 
 ## Development — BLE connection contention
 
