@@ -19,6 +19,10 @@ static_assert(sizeof(ECOFLOW_USER_ID) > 1,
               "(fetch it with scripts/ecoflow_userid.py)");
 #endif
 
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+#include "telemetry/logger.h"
+#endif
+
 static const uint32_t kPollIntervalMs = 60000;
 static const uint32_t kScanWindowMs = 2500;
 static const uint32_t kReconnectMs = 5000;
@@ -50,6 +54,10 @@ EcoflowMonitor battery;
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
 EcoflowSession ecoflowSession;
 static uint32_t lastEcoConnAttemptMs = 0;
+#endif
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+static telemetry::Logger telemetryLogger;
+static uint32_t lastSampleMs = 0;
 #endif
 
 static uint32_t lastConnAttemptMs = 0;
@@ -416,7 +424,68 @@ void setup() {
   ecoflowSession.begin(ECOFLOW_SERIAL, ECOFLOW_USER_ID);
   Serial.println("EcoFlow GATT telemetry: ENABLED (advanced)");
 #endif
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+  telemetryLogger.begin();
+  Serial.println("Telemetry logging: ENABLED (flash ring)");
+#endif
 }
+
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+// Assemble one telemetry sample from the freshest readings and append it to the
+// flash ring. Fields absent right now (fridge not yet connected, no EcoFlow
+// session) are simply omitted; an all-empty sample is skipped by the logger.
+static void logTelemetrySample() {
+  telemetry::Sample s;
+
+  const FridgeReading& f = fridge.reading();
+  if (f.valid) {
+    s.haveFridgeTemp = true;
+    s.fridgeTempC = f.actualTemp;
+    s.haveFridgeSetpoint = true;
+    s.fridgeSetpointC = f.targetTemp;
+    s.haveFridgeOn = true;
+    s.fridgeOn = f.poweredOn;
+  }
+
+  bool socFromGatt = false;
+#if defined(ECOFLOW_GATT) && ECOFLOW_GATT
+  // The authenticated session yields high-res SoC plus watts and time-to-full/
+  // empty; prefer it over the passive advert %.
+  const EcoflowRichReading& er = ecoflowSession.reading();
+  if (ecoflowSession.authenticated()) {
+    if (er.haveSoc) {
+      s.haveSoc = true;
+      s.socPct = er.soc;
+      socFromGatt = true;
+    }
+    if (er.haveInputWatts) {
+      s.haveInWatts = true;
+      s.inWatts = er.inputWatts;
+    }
+    if (er.haveOutputWatts) {
+      s.haveOutWatts = true;
+      s.outWatts = er.outputWatts;
+    }
+    if (er.state == EcoflowRichReading::Charge::kCharging &&
+        er.haveChargeRemainMin) {
+      s.haveRemainMin = true;
+      s.remainMin = er.chargeRemainMin;
+    } else if (er.state == EcoflowRichReading::Charge::kDischarging &&
+               er.haveDischargeRemainMin) {
+      s.haveRemainMin = true;
+      s.remainMin = er.dischargeRemainMin;
+    }
+  }
+#endif
+  const BatteryReading& b = battery.reading();
+  if (!socFromGatt && b.valid) {
+    s.haveSoc = true;
+    s.socPct = (float)b.percent;
+  }
+
+  telemetryLogger.log(s);
+}
+#endif
 
 void loop() {
   // One scan window feeds both devices (sliced so a BOOT press is seen quickly).
@@ -476,6 +545,15 @@ void loop() {
   if (buttonPressed) confirmPowerToggle();
 
   renderPage();
+
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+  // One sample per poll cycle, matching the fridge's 60 s cadence. `now` was
+  // taken earlier this loop; close enough for a per-minute log.
+  if (lastSampleMs == 0 || now - lastSampleMs >= kPollIntervalMs) {
+    lastSampleMs = now;
+    logTelemetrySample();
+  }
+#endif
 
   // Log a status line only when something changes, so the serial console stays
   // useful on this otherwise headless device without spamming every loop.
