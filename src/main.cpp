@@ -199,6 +199,17 @@ static void drawSpinner(int cx, int cy, uint8_t frame) {
   }
 }
 
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+// Small WiFi glyph — a base dot with two arcs opening upward — shown at the
+// fridge column's lower-right (mirroring the setpoint at lower-left) whenever
+// the uploader holds a WiFi link. baseY is the dot; the arcs rise above it.
+static void drawWifiIcon(int cx, int baseY) {
+  display.drawPixel(cx, baseY);
+  display.drawCircle(cx, baseY, 2, U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT);
+  display.drawCircle(cx, baseY, 4, U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT);
+}
+#endif
+
 static void renderPage() {
   const FridgeReading& f = fridge.reading();
   const BatteryReading& b = battery.reading();
@@ -287,6 +298,11 @@ static void renderPage() {
     int fillH = (barH - 2) * pct / 100;
     display.drawBox(sx + vbarX + 1, barTop + 1 + (barH - 2 - fillH), vbarW - 2, fillH);
   }
+
+#if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
+  // WiFi-connected indicator, lower-right of the fridge column.
+  if (telemetryUploader.wifiConnected()) drawWifiIcon(sx + 27, sy + 37);
+#endif
 
   display.sendBuffer();
 }

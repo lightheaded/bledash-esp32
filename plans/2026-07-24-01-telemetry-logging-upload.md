@@ -179,9 +179,18 @@ retired. **Flash was the real cost:** GATT + WiFi/TLS overflowed the default
   failed POST just waits for the next 60 s tick. A compile-guarded bench hook
   (`TELEMETRY_SELFTEST`, off by default) injects one synthetic sample so the
   upload path can be exercised without BLE devices in range.
-- **T4 — Field verification.** A real drive + overnight parked cycle;
-  confirm the cooldown/retention/discharge curves render correctly from the
-  uploaded data with true timestamps.
+- **T4 — Field verification. 🚧 underway.** With both devices live in the car,
+  the full metric set uploads and lands correctly: `fridge_temp_c/setpoint/on`,
+  `eco_soc_pct`, `eco_in_w/out_w`, `eco_remain_min` — a real discharge captured
+  (SoC 31 → 29%, out ~30 W, ~280 min to empty). Dual BLE GATT (fridge + EcoFlow)
+  + always-on WiFi + TLS upload coexist with ~131 KB free heap. Observations to
+  fold into T5: (a) EcoFlow GATT needs a decent link — at RSSI ≤ −88 the driver
+  stays passive; a marginal link connects then drops (`reason=531`), briefly
+  interrupting even passive %; ≥ −79 it authenticates cleanly. (b) A rich POST
+  occasionally returns transport error −1 under heavy dual-GATT airtime; the
+  cursor-on-2xx retry re-sends it next tick, no loss. Still wanted: the overnight
+  parked/retention leg. A WiFi-connected indicator was added to the display
+  (lower-right of the fridge column).
 - **T5 — Docs + release.** README roadmap update ("MQTT bridge" item replaced
   by this), config.example.h documented, PR. Public docs describe the feature
   as "bring your own line-protocol endpoint".
