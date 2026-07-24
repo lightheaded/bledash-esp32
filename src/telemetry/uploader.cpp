@@ -18,12 +18,19 @@
 namespace telemetry {
 namespace {
 
-constexpr uint32_t kUploadIntervalMs = 60000;  // drain cadence when synced
-constexpr uint32_t kWifiRetryMs = 15000;       // reconnect attempt interval
+// Drain attempt cadence. Short so a brief coverage window in the car (spotty
+// cell backhaul on the hotspot) gets used promptly; the backlog persists on
+// flash and the cursor only advances on a 2xx, so retries never lose data.
+constexpr uint32_t kDrainIntervalMs = 20000;
+constexpr uint32_t kWifiRetryMs = 15000;       // fallback WiFi.begin() interval
 constexpr size_t kMaxLinesPerPost = 300;       // ~16 KB of line protocol
 constexpr size_t kMaxBytesPerPost = 16000;
 // Matches Logger's threshold: below this epoch the RTC is clearly unset.
 constexpr uint32_t kMinValidEpoch = 1700000000u;
+// Bound each POST so a half-open link (associated to the hotspot but no
+// upstream) fails fast instead of stalling the BLE loop for the default ~30 s.
+constexpr int kConnectTimeoutMs = 4000;
+constexpr int kHttpTimeoutMs = 8000;
 
 const char* caPem() {
 #ifdef TELEMETRY_CA_PEM
@@ -38,7 +45,9 @@ const char* caPem() {
 void Uploader::begin(Logger& logger) {
   logger_ = &logger;
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(true);  // modem sleep — lets BLE and WiFi share the one radio
+  WiFi.persistent(false);        // don't wear flash writing creds every connect
+  WiFi.setAutoReconnect(true);   // let the stack recover drops on its own
+  WiFi.setSleep(true);           // modem sleep — BLE and WiFi share the one radio
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.printf("[upload] WiFi joining \"%s\"\n", WIFI_SSID);
 }
@@ -50,9 +59,11 @@ void Uploader::poll() {
   uint32_t now = millis();
 
   if (WiFi.status() != WL_CONNECTED) {
+    // setAutoReconnect handles most drops; re-issue begin() periodically as a
+    // fallback for states it doesn't recover from. No disconnect() first — that
+    // would abort an in-flight reassociation and slow recovery on a spotty link.
     if (lastWifiTryMs_ == 0 || now - lastWifiTryMs_ >= kWifiRetryMs) {
       lastWifiTryMs_ = now;
-      WiFi.disconnect();
       WiFi.begin(WIFI_SSID, WIFI_PASS);
     }
     return;
@@ -75,7 +86,7 @@ void Uploader::poll() {
   }
 
   if (bootEpochValid_ &&
-      (lastDrainMs_ == 0 || now - lastDrainMs_ >= kUploadIntervalMs)) {
+      (lastDrainMs_ == 0 || now - lastDrainMs_ >= kDrainIntervalMs)) {
     lastDrainMs_ = now;
     if (logger_->pendingBytes() > 0) {
       size_t sent = drain();
@@ -137,6 +148,8 @@ int Uploader::post(const char* body, size_t len) {
   client.setCACert(caPem());
 
   HTTPClient http;
+  http.setConnectTimeout(kConnectTimeoutMs);
+  http.setTimeout(kHttpTimeoutMs);
   String url = String(TELEMETRY_URL) + "?precision=s";
   if (!http.begin(client, url)) return -1;
   http.setAuthorization(TELEMETRY_USER, TELEMETRY_PASS);
