@@ -36,7 +36,29 @@ class AlpicoolDriver : public NimBLEClientCallbacks {
   // Call frequently. Sends a QUERY when connected and the interval has elapsed.
   void poll();
 
+  // Send a QUERY now (if connected), independent of the poll cadence. Used to
+  // poll for confirmation right after a SET.
+  void requestStatusNow();
+
+  // Set the compressor on/off. Rebuilds the fridge's full 14-byte settings
+  // struct from the last QUERY snapshot (preserving every other setting) with
+  // only the power byte changed, and sends it as a SET (cmd 0x02). Returns false
+  // if not ready (disconnected, or no status snapshot cached yet). Forces a
+  // re-QUERY on the next poll() so reading() reflects the applied state.
+  bool setPower(bool on);
+
   bool connected() const { return client_ && client_->isConnected(); }
+  // True once we can safely issue a SET: connected AND we hold a QUERY snapshot
+  // to reconstruct the settings struct from.
+  bool canControl() const { return connected() && haveStatusPrefix_; }
+  // True between a setPower() SET and the next status frame that resolves it —
+  // i.e. while we've asked for a change but reading() may still show the old
+  // state. Lets the UI show a "confirming" indicator instead of a stale value.
+  // Auto-expires after kPowerPendingMaxMs so a lost reply on a weak link can't
+  // wedge the indicator on indefinitely.
+  bool powerChangePending() const {
+    return powerPending_ && (millis() - powerSetMs_ < kPowerPendingMaxMs);
+  }
   const FridgeReading& reading() const { return reading_; }
 
  private:
@@ -58,4 +80,18 @@ class AlpicoolDriver : public NimBLEClientCallbacks {
   std::vector<uint8_t> buf_;  // notification reassembly buffer
   FridgeReading reading_;
   uint32_t lastQueryMs_ = 0;
+
+  // First 14 bytes of the last QUERY response payload = the fridge's full
+  // settings struct (locked, powerOn, runMode, batProtect, target, temp max/min,
+  // return-diff, start-delay, unit, 4×tc). SET (0x02) resends this struct, so a
+  // safe power toggle copies it verbatim and flips only the power byte. Cleared
+  // on disconnect so we never build a SET from stale settings.
+  uint8_t statusPrefix_[14] = {0};
+  bool haveStatusPrefix_ = false;
+
+  // Set when a SET is sent, cleared by the next status frame (the confirming
+  // re-QUERY) or on disconnect. Drives the UI "confirming" indicator.
+  static constexpr uint32_t kPowerPendingMaxMs = 5000;
+  bool powerPending_ = false;
+  uint32_t powerSetMs_ = 0;
 };

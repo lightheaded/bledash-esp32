@@ -22,6 +22,19 @@ static_assert(sizeof(ECOFLOW_USER_ID) > 1,
 static const uint32_t kPollIntervalMs = 60000;
 static const uint32_t kScanWindowMs = 2500;
 static const uint32_t kReconnectMs = 5000;
+// Onboard BOOT button (GPIO9): a press toggles the fridge compressor on/off.
+// It's the only runtime-usable button on this board — RST is the chip reset
+// line, not a readable GPIO. GPIO9 is active-low with an external pull-up and is
+// a boot strap (must read HIGH at reset), which a runtime press doesn't affect.
+static const uint8_t kBootButtonPin = 9;
+// Toggling fridge power requires a deliberate press-and-HOLD, not a tap: turning
+// the fridge off (or on) by accident is the failure we're guarding against. The
+// hold shows a full-screen countdown; releasing early cancels.
+static const uint32_t kHoldToToggleMs = 1000;
+// The main loop blocks inside the BLE scan, so we scan in short slices and bail
+// the instant BOOT is pressed — otherwise the hold animation would start up to a
+// full scan window late and the countdown wouldn't track the real hold.
+static const uint32_t kScanSliceMs = 200;
 // The authenticated GATT handshake needs a usable link (bidirectional writes +
 // notifications). Below this advertised RSSI we don't grab the connection —
 // which would only stall and also stop the unit advertising — and instead keep
@@ -40,6 +53,15 @@ static uint32_t lastEcoConnAttemptMs = 0;
 #endif
 
 static uint32_t lastConnAttemptMs = 0;
+
+// Set by the BOOT-button ISR on each press (falling edge); consumed in loop().
+// The ISR does the minimum — latch a flag — so a press is never lost while the
+// loop is blocked in the scan. The hold gesture itself is measured by polling
+// the pin directly in confirmPowerToggle(), so contact bounce is harmless: a
+// bounce can't sustain a 1 s hold.
+static volatile bool buttonPressed = false;
+
+static void IRAM_ATTR onBootButton() { buttonPressed = true; }
 
 static const uint8_t* bigFont(const char* s) {
   return strlen(s) >= 3 ? u8g2_font_logisoso16_tr : u8g2_font_logisoso24_tr;
@@ -153,6 +175,20 @@ static void drawEcoflowRich(int x0, int w, int sy, int socPct,
 }
 #endif
 
+// Loading spinner: a ring of 8 dots with one highlighted, advancing by `frame`.
+// Shown in place of the fridge reading while a power change awaits its confirming
+// QUERY, so the display never shows a stale on/off state as if it were current.
+static void drawSpinner(int cx, int cy, uint8_t frame) {
+  const float r = 9.0f;
+  for (int i = 0; i < 8; i++) {
+    float a = i * (2.0f * PI / 8.0f) - PI / 2.0f;  // 0 at top, clockwise
+    int x = cx + (int)lroundf(r * cosf(a));
+    int y = cy + (int)lroundf(r * sinf(a));
+    if (i == frame % 8) display.drawDisc(x, y, 2);
+    else display.drawPixel(x, y);
+  }
+}
+
 static void renderPage() {
   const FridgeReading& f = fridge.reading();
   const BatteryReading& b = battery.reading();
@@ -190,21 +226,34 @@ static void renderPage() {
   display.clearBuffer();
 
   // --- Left column: fridge ---
-  // Lower-left: setpoint normally; "OFF" when the compressor is off; ".." while
-  // (re)connecting. No "ON" — a shown temperature already implies it's running.
-  display.setFont(u8g2_font_5x7_tf);
-  char sp[8];
-  if (fStale)
-    snprintf(sp, sizeof(sp), "%s", fridge.connected() ? ".." : "");
-  else if (!f.poweredOn)
-    snprintf(sp, sizeof(sp), "OFF");
-  else
-    snprintf(sp, sizeof(sp), "%d\xb0", f.targetTemp);
-  display.drawStr(sx, spY, sp);
-  char temp[8];
-  snprintf(temp, sizeof(temp), fStale ? "--" : "%d", f.actualTemp);
-  if (fStale) drawBigCentered(sx, leftW, bigY, temp);
-  else drawBigTemp(sx, leftW, bigY, temp);
+  if (fridge.powerChangePending()) {
+    // A power toggle was just sent; show a spinner until the confirming QUERY
+    // lands, rather than the (still stale) on/off reading.
+    static uint8_t spin = 0;
+    drawSpinner(sx + leftW / 2, sy + 13, spin++);
+  } else if (!fStale && !f.poweredOn) {
+    // Compressor off: big "OFF" plus a compact hint that the BOOT button turns
+    // it back on ("R btn" in the board's USB-down orientation). Without the hint
+    // an off fridge looks like a dead readout.
+    drawBigCentered(sx, leftW, bigY, "OFF");
+    display.setFont(u8g2_font_4x6_tf);
+    const char* hint = "hold=ON";
+    display.drawStr(sx + (leftW - display.getStrWidth(hint)) / 2, spY, hint);
+  } else {
+    // Lower-left: setpoint normally; ".." while (re)connecting. No "ON" — a shown
+    // temperature already implies it's running.
+    display.setFont(u8g2_font_5x7_tf);
+    char sp[8];
+    if (fStale)
+      snprintf(sp, sizeof(sp), "%s", fridge.connected() ? ".." : "");
+    else
+      snprintf(sp, sizeof(sp), "%d\xb0", f.targetTemp);
+    display.drawStr(sx, spY, sp);
+    char temp[8];
+    snprintf(temp, sizeof(temp), fStale ? "--" : "%d", f.actualTemp);
+    if (fStale) drawBigCentered(sx, leftW, bigY, temp);
+    else drawBigTemp(sx, leftW, bigY, temp);
+  }
 
   // --- Right column: battery (passive %) or rich EcoFlow (authenticated GATT) ---
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
@@ -232,10 +281,124 @@ static void renderPage() {
   display.sendBuffer();
 }
 
+// Scan for adverts in short slices instead of one long blocking call, returning
+// early the moment BOOT is pressed so the hold animation starts promptly. Slices
+// after the first continue the same scan (no clear) so results accumulate.
+static NimBLEScanResults scanWindow() {
+  NimBLEScan* scan = NimBLEDevice::getScan();
+  NimBLEScanResults res;
+  for (uint32_t elapsed = 0; elapsed < kScanWindowMs; elapsed += kScanSliceMs) {
+    res = scan->getResults(kScanSliceMs, elapsed != 0);
+    if (buttonPressed) break;
+  }
+  return res;
+}
+
+// Full-screen hold-to-confirm progress: title naming the pending action, a bar
+// filling left→right, and a 1-decimal countdown. Transient, so it skips the
+// burn-in shift.
+static void renderHoldScreen(const char* action, uint32_t held, uint32_t holdMs) {
+  if (held > holdMs) held = holdMs;
+  const int W = display.getDisplayWidth();  // 72
+  display.clearBuffer();
+
+  display.setFont(u8g2_font_5x7_tf);
+  const char* l1 = "HOLD TO TURN";
+  display.drawStr((W - display.getStrWidth(l1)) / 2, 6, l1);
+  char l2[16];
+  snprintf(l2, sizeof(l2), "FRIDGE %s", action);
+  display.drawStr((W - display.getStrWidth(l2)) / 2, 14, l2);
+
+  // Countdown, big and centered (e.g. "0.7").
+  char cd[8];
+  snprintf(cd, sizeof(cd), "%.1f", (holdMs - held) / 1000.0f);
+  display.setFont(u8g2_font_logisoso16_tr);
+  display.drawStr((W - display.getStrWidth(cd)) / 2, 31, cd);
+
+  // Progress bar along the bottom.
+  const int bx = 1, by = 34, bw = W - 2, bh = 5;
+  display.drawFrame(bx, by, bw, bh);
+  int fill = (bw - 2) * (int)held / (int)holdMs;
+  if (fill > 0) display.drawBox(bx + 1, by + 1, fill, bh - 2);
+
+  display.sendBuffer();
+}
+
+// Brief post-toggle acknowledgement so the press feels registered before the
+// re-QUERY confirms the real state.
+static void renderToggleFlash(const char* action) {
+  const int W = display.getDisplayWidth();
+  display.clearBuffer();
+  display.setFont(u8g2_font_5x7_tf);
+  const char* l1 = "FRIDGE";
+  display.drawStr((W - display.getStrWidth(l1)) / 2, 12, l1);
+  display.setFont(u8g2_font_logisoso16_tr);
+  display.drawStr((W - display.getStrWidth(action)) / 2, 34, action);
+  display.sendBuffer();
+  delay(800);
+}
+
+// After a toggle, animate the spinner smoothly while polling for the confirming
+// QUERY — the main loop repaints only once per scan (~2.5 s), far too slow for a
+// spinner, so we drive it here at ~25 fps and re-QUERY periodically until the
+// status frame resolves (clears powerChangePending) or we give up. renderPage()
+// already draws the spinner in the pending branch; calling it rapidly animates
+// it while keeping the battery column live.
+static void waitForPowerConfirm() {
+  const uint32_t kTimeoutMs = 4000;
+  const uint32_t kRequeryMs = 800;
+  uint32_t start = millis();
+  uint32_t lastQuery = 0;
+  while (fridge.powerChangePending() && millis() - start < kTimeoutMs) {
+    uint32_t nowMs = millis();
+    if (nowMs - lastQuery >= kRequeryMs) {
+      fridge.requestStatusNow();  // safe: the 800 ms flash already gave the device
+      lastQuery = nowMs;          // time to apply the SET (vendor re-queries at 500 ms)
+    }
+    renderPage();
+    delay(40);
+  }
+}
+
+// Handle a latched BOOT press: require a full hold before toggling fridge power,
+// rendering the countdown throughout. A release (or the button never actually
+// being held, e.g. a bounce) cancels with no change. Polls the pin directly so
+// the gesture is immune to the loop's scan blocking.
+static void confirmPowerToggle() {
+  buttonPressed = false;
+  if (!fridge.canControl()) {
+    Serial.println("[button] fridge not connected/ready; ignoring hold");
+    return;
+  }
+  bool target = !fridge.reading().poweredOn;  // OFF->ON or ON->OFF
+  const char* action = target ? "ON" : "OFF";
+  uint32_t start = millis();
+
+  while (digitalRead(kBootButtonPin) == LOW) {  // LOW = held (active-low)
+    uint32_t held = millis() - start;
+    renderHoldScreen(action, held, kHoldToToggleMs);
+    if (held >= kHoldToToggleMs) {
+      Serial.printf("[button] hold confirmed -> turning fridge %s\n", action);
+      fridge.setPower(target);
+      renderToggleFlash(action);
+      waitForPowerConfirm();  // smooth spinner until the change is confirmed
+      buttonPressed = false;  // discard any bounce latched during the hold
+      return;
+    }
+    delay(25);
+  }
+  Serial.println("[button] hold released early -> cancelled");
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println("\n=== bledash: fridge + battery ===");
+
+  // BOOT button toggles fridge power. Active-low; FALLING = press. The press is
+  // latched here and confirmed by a press-and-hold in confirmPowerToggle().
+  pinMode(kBootButtonPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(kBootButtonPin), onBootButton, FALLING);
 
   Wire.begin(OLED_SDA, OLED_SCL);
   display.begin();
@@ -256,9 +419,9 @@ void setup() {
 }
 
 void loop() {
-  // One scan window feeds both devices.
+  // One scan window feeds both devices (sliced so a BOOT press is seen quickly).
   NimBLEScan* scan = NimBLEDevice::getScan();
-  NimBLEScanResults res = scan->getResults(kScanWindowMs, false);
+  NimBLEScanResults res = scanWindow();
 
   const NimBLEAdvertisedDevice* fridgeDev = nullptr;
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
@@ -305,6 +468,13 @@ void loop() {
 #if defined(ECOFLOW_GATT) && ECOFLOW_GATT
   ecoflowSession.poll();
 #endif
+
+  // BOOT-button press: hold-to-confirm, then toggle fridge power. Handled after
+  // poll() so setPower()'s forced re-QUERY lands on the NEXT poll() (giving the
+  // device time to apply the SET) rather than immediately, which would read the
+  // stale pre-toggle state and then not re-query for a full interval.
+  if (buttonPressed) confirmPowerToggle();
+
   renderPage();
 
   // Log a status line only when something changes, so the serial console stays

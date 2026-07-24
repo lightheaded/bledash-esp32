@@ -10,6 +10,7 @@ const uint8_t kBind[] = {0xFE, 0xFE, 0x03, 0x00, 0x01, 0xFF};
 const uint8_t kQuery[] = {0xFE, 0xFE, 0x03, 0x01, 0x02, 0x00};
 
 constexpr uint8_t kCmdQuery = 0x01;
+constexpr uint8_t kCmdSet = 0x02;  // "set all settings" struct (see setPower)
 
 int8_t toSigned(uint8_t b) { return b > 127 ? (int)b - 256 : (int)b; }
 }  // namespace
@@ -31,6 +32,8 @@ void AlpicoolDriver::onDisconnect(NimBLEClient*, int reason) {
   writeChar_ = nullptr;
   notifyChar_ = nullptr;
   buf_.clear();
+  haveStatusPrefix_ = false;  // settings snapshot is stale after a drop
+  powerPending_ = false;      // no longer waiting on a confirming QUERY
 }
 
 bool AlpicoolDriver::discoverChars() {
@@ -150,9 +153,52 @@ void AlpicoolDriver::parseStatus(const uint8_t* p, size_t len) {
   reading_.valid = true;
   reading_.lastUpdateMs = millis();
 
+  // Cache the settings struct (payload bytes 0..13) so setPower() can resend it
+  // with only the power byte flipped. len>=15 above guarantees these 14 bytes.
+  memcpy(statusPrefix_, p, sizeof(statusPrefix_));
+  haveStatusPrefix_ = true;
+  powerPending_ = false;  // this frame resolves any in-flight power change
+
   Serial.printf("[alpicool] status: on=%d target=%d°C actual=%d°C batProt=%d\n",
                 reading_.poweredOn, reading_.targetTemp, reading_.actualTemp,
                 reading_.batProtect);
+}
+
+bool AlpicoolDriver::setPower(bool on) {
+  if (!canControl() || !writeChar_) return false;
+
+  // SET frame: FE FE <len> <cmd=0x02> <14-byte settings> <checksum:2 big-endian>.
+  // len counts everything after the header = cmd + 14 + 2 = 17 (0x11). Checksum
+  // is the 16-bit sum of all preceding bytes (header..last settings byte).
+  uint8_t frame[3 + 1 + sizeof(statusPrefix_) + 2];
+  frame[0] = 0xFE;
+  frame[1] = 0xFE;
+  frame[2] = 1 + sizeof(statusPrefix_) + 2;  // 0x11
+  frame[3] = kCmdSet;
+  memcpy(frame + 4, statusPrefix_, sizeof(statusPrefix_));
+  frame[5] = on ? 0x01 : 0x00;  // payload offset 1 = powered_on
+
+  uint16_t sum = 0;
+  const size_t checkLen = 4 + sizeof(statusPrefix_);  // through the last setting
+  for (size_t i = 0; i < checkLen; i++) sum += frame[i];
+  frame[checkLen] = (sum >> 8) & 0xFF;
+  frame[checkLen + 1] = sum & 0xFF;
+
+  sendPacket(frame, sizeof(frame));
+  Serial.printf("[alpicool] SET power=%d sent\n", on);
+
+  // The device echoes SET (no functional ACK); confirm by re-QUERYing next poll.
+  // Mark pending so the UI shows "confirming" until that QUERY lands.
+  powerPending_ = true;
+  powerSetMs_ = millis();
+  lastQueryMs_ = 0;
+  return true;
+}
+
+void AlpicoolDriver::requestStatusNow() {
+  if (!connected()) return;
+  sendPacket(kQuery, sizeof(kQuery));
+  lastQueryMs_ = millis();  // also anchors the normal poll cadence
 }
 
 void AlpicoolDriver::poll() {
