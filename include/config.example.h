@@ -54,3 +54,7 @@
 #define TELEMETRY_URL ""
 #define TELEMETRY_USER ""
 #define TELEMETRY_PASS ""
+// TLS is verified against the embedded ISRG Root X1 (Let's Encrypt) by default.
+// For a sink with a different issuer, define TELEMETRY_CA_PEM as the CA PEM
+// string here; leave it undefined for Let's Encrypt endpoints.
+// #define TELEMETRY_CA_PEM "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"

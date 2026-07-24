@@ -37,6 +37,10 @@ class Logger {
   uint32_t droppedRecords() const;  // 0 if !ready
   size_t pendingBytes();            // 0 if !ready
 
+  // The backing ring, for the uploader's drain loop (readBatch/commit). Null
+  // until begin() succeeds.
+  RingLog* ring() { return ring_; }
+
  private:
   bool ready_ = false;
   RingLog* ring_ = nullptr;  // constructed in begin() once FS is up

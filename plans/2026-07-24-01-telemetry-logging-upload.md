@@ -1,10 +1,12 @@
 # Telemetry logging + upload — performance graphs for fridge & battery
 
 - **Date:** 2026-07-24
-- **Status:** 🚧 in progress — server side live and verified end-to-end (see
-  "Server side" below); **T1 (host-testable logger core) implemented** on branch
-  `telemetry-logging`, behind `TELEMETRY_UPLOAD` (off by default). T2–T5 not
-  started (need hardware / a field cycle).
+- **Status:** 🚧 in progress — server side live; **T1–T3 implemented and verified
+  on hardware** on branch `telemetry-logging`, behind `TELEMETRY_UPLOAD` (off by
+  default). A synthetic sample was logged, uploaded over WiFi/HTTPS, and
+  confirmed landed in Prometheus (`bledash_fridge_temp_c{device="car"}=123`) with
+  a correct resolved timestamp. **T4** (a real drive + overnight parked cycle,
+  once the devices are in range) and **T5** (docs + PR) remain.
 - **Depends on:** v0.2.0 (fridge driver + EcoFlow GATT telemetry). Touches
   `main.cpp` and adds a new `src/telemetry/` layer; no changes to the BLE
   drivers themselves.
@@ -136,6 +138,16 @@ uploader work:
   (~45 KB heap during handshake) and freed after, so the steady-state RAM
   cost is near zero.
 
+**Measured (bench, WiFi joined, one TLS POST, NimBLE running):** free heap held
+at **~134 KB during the handshake+POST** — no memory pressure, so the always-on
+STA model was kept (the upload-window fallback stays documented but unused). BLE
+scanning continued through association. GATT-under-WiFi stability still wants the
+T4 field check with the EcoFlow in range, but the heap risk — the main worry — is
+retired. **Flash was the real cost:** GATT + WiFi/TLS overflowed the default
+1.25 MB app slot (99%), so the env moved to `no_ota.csv` (single 2 MB app slot,
+~1.9 MB LittleFS); the telemetry build is now ~62% of 2 MB. OTA was unused
+(USB flashing) so dropping the second app slot is free.
+
 ## Milestones
 
 - **T1 — Logger (host-testable core). ✅ done** (`telemetry-logging`).
@@ -151,13 +163,22 @@ uploader work:
   is T3. Smoke-tested on the ESP32-C3: LittleFS mounts, a sample is appended
   each cycle, and the backlog persists across a reboot (`logging ready (pending
   41 B)` after a reset), confirming the meta/cursor reload on real flash.
-- **T2 — Coexistence spike.** STA join + SNTP while both GATT sessions run.
-  Measure: scan hit rate, fridge poll success, EcoFlow session stability, heap
-  headroom (with TLS handshake). Decide always-on vs upload-window model.
-  *Everything after this adapts to what T2 finds.*
-- **T3 — Uploader.** Backlog drain over HTTPS with basic auth, chunking,
-  2xx-gated cursor advance, retry/backoff, epoch backfill of pre-sync samples.
-  Serial-log a one-line summary per drain (lines sent, HTTP status, seconds).
+- **T2 — Coexistence spike. ✅ done.** Always-on STA + SNTP alongside NimBLE.
+  Result: ~134 KB free heap through the TLS handshake, BLE scanning uninterrupted,
+  no crash — always-on model adopted. Required a partition change to `no_ota.csv`
+  (see the coexistence section). SNTP sync latches this boot's epoch offset, used
+  to resolve boot-relative records at upload. GATT-session stability under WiFi is
+  deferred to the T4 field check (EcoFlow was out of range on the bench).
+- **T3 — Uploader. ✅ done** (`telemetry/uploader.{h,cpp}`). Backlog drain over
+  HTTPS (`WiFiClientSecure` + embedded ISRG Root X1, override via
+  `TELEMETRY_CA_PEM`) with basic auth, chunked (≤300 lines / ~16 KB per POST),
+  2xx-gated cursor advance, and a one-line serial summary per drain. Verified on
+  hardware against the live endpoint: `POST 66 B -> 204`, cursor advanced, and
+  the point landed in Prometheus at the correct resolved time. Retry is simply
+  "leave the cursor, try next drain"; exponential backoff wasn't needed since a
+  failed POST just waits for the next 60 s tick. A compile-guarded bench hook
+  (`TELEMETRY_SELFTEST`, off by default) injects one synthetic sample so the
+  upload path can be exercised without BLE devices in range.
 - **T4 — Field verification.** A real drive + overnight parked cycle;
   confirm the cooldown/retention/discharge curves render correctly from the
   uploaded data with true timestamps.

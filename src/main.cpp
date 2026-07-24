@@ -21,6 +21,7 @@ static_assert(sizeof(ECOFLOW_USER_ID) > 1,
 
 #if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
 #include "telemetry/logger.h"
+#include "telemetry/uploader.h"
 #endif
 
 static const uint32_t kPollIntervalMs = 60000;
@@ -57,6 +58,7 @@ static uint32_t lastEcoConnAttemptMs = 0;
 #endif
 #if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
 static telemetry::Logger telemetryLogger;
+static telemetry::Uploader telemetryUploader;
 static uint32_t lastSampleMs = 0;
 #endif
 
@@ -426,7 +428,22 @@ void setup() {
 #endif
 #if defined(TELEMETRY_UPLOAD) && TELEMETRY_UPLOAD
   telemetryLogger.begin();
-  Serial.println("Telemetry logging: ENABLED (flash ring)");
+  telemetryUploader.begin(telemetryLogger);
+  Serial.println("Telemetry logging + upload: ENABLED");
+#if defined(TELEMETRY_SELFTEST) && TELEMETRY_SELFTEST
+  // Bench diagnostic (off by default): inject one synthetic sample so the
+  // WiFi/TLS upload path can be exercised without BLE devices in range. The
+  // sentinel temp (123) marks it as non-real in the sink.
+  {
+    telemetry::Sample st;
+    st.haveFridgeTemp = true;
+    st.fridgeTempC = 123;
+    st.haveSoc = true;
+    st.socPct = 99.9f;
+    telemetryLogger.log(st);
+    Serial.println("[telemetry] SELFTEST sample injected");
+  }
+#endif
 #endif
 }
 
@@ -553,6 +570,8 @@ void loop() {
     lastSampleMs = now;
     logTelemetrySample();
   }
+  // WiFi upkeep, SNTP, and backlog drain (self-throttled; cheap when idle).
+  telemetryUploader.poll();
 #endif
 
   // Log a status line only when something changes, so the serial console stays
